@@ -4,15 +4,16 @@ What happens between "user hits enter" and "answer + table + chart appear".
 Companion to [architecture-proposal.md](../history/architecture-proposal.md) (the why) and
 [codebase.md](codebase.md) (the whole stack).
 
-**There are three pipelines in this product, and this file is the first of
-three.** §0 maps all three and states what they share; §1 onwards is the chat
-run in full. The other two have files of their own, written to the same shape:
+**There are four pipelines in this product, and this file is the first of
+four.** §0 maps all four and states what they share; §1 onwards is the chat
+run in full. The other three have files of their own, written to the same shape:
 
 | Pipeline | Produces | File |
 |---|---|---|
 | **Chat** | an answer + table + chart, streamed | this file |
 | **Dashboard** | a tile's SQL (once), then its result (forever) | [pipeline-dashboard.md](pipeline-dashboard.md) |
 | **Report** | an outline, a statement per block, then a written document | [pipeline-report.md](pipeline-report.md) |
+| **Deep** | a plan, one guarded statement per step, then a cited answer — **off by default** | [pipeline-deep.md](pipeline-deep.md) |
 
 Code: [`backend/app/pipeline/`](../../backend/app/pipeline) —
 `graph.py` (the compiled LangGraph, `ORDER`, and the node adapter),
@@ -23,28 +24,29 @@ port), `nodes/__init__.py` (all twelve nodes), `state.py` (typed state),
 
 ---
 
-## 0. The three pipelines, and what they share
+## 0. The four pipelines, and what they share
 
 ### 0.1 Side by side
 
-| | **Chat** | **Dashboard** | **Report** |
-|---|---|---|---|
-| Entry | `POST /conversations/{id}/messages` | `POST /sql/drafts` → tile save → `POST /dashboards/{id}/data` | `POST /reports/{id}/outline` → `.../blocks/{id}/check` → `POST /reports/{id}/runs` |
-| Orchestrator | `AnalyticsPipeline` — an 11-node state machine | none: a service function + `asyncio.gather` | `ReportRunExecutor` + a linear worker body |
-| Shape | streamed (SSE), 5–60s | request/response, sub-second on a cache hit | queued (**202**) + polled, minutes |
-| Model runs | **at ask time**, every time | **at authoring time only** | at authoring time *and* at generation time |
-| Typical calls | 4 (+1 for a chart) | 2 per drafted tile (SQL, then chart), **0** per refresh | 1 outline + 1 per block + 1 per section + 1 summary |
-| SQL comes from | `generate`, fresh per question | `dashboard_tiles.sql`, stored | `report_blocks.sql`, stored |
-| Guard entry point | `validate` node (a taught question lands there too) | `execute_saved_sql` | `execute_saved_sql` |
-| Result values → model? | `present`, per policy | **never** | `narrate`, per policy (and `NONE`/`AGGREGATE` are refused outright) |
-| Repair loop | 1, shared by guard/DB/checks | 1, at draft time only | 1, at block-check time only |
-| Failure posture | the run fails, with an error artifact | a per-tile `ERROR` **value** | per section; the run's status is **derived** |
-| Persists | `runs`, `run_steps`, `messages`, artifacts | `dashboard_tile_cache` | `report_runs` + block/section result rows |
+| | **Chat** | **Dashboard** | **Report** | **Deep** |
+|---|---|---|---|---|
+| Entry | `POST /conversations/{id}/messages` | `POST /sql/drafts` → tile save → `POST /dashboards/{id}/data` | `POST /reports/{id}/outline` → `.../blocks/{id}/check` → `POST /reports/{id}/runs` | the chat entry, with `depth: "DEEP"` — refused unless `deep_enabled`, `deep.run` and the connection's budget all allow it |
+| Orchestrator | `AnalyticsPipeline` — an 11-node state machine | none: a service function + `asyncio.gather` | `ReportRunExecutor` + a linear worker body | `DeepPipeline` — a **cycle**, one pass per step, under a budget that fails closed |
+| Shape | streamed (SSE), 5–60s | request/response, sub-second on a cache hit | queued (**202**) + polled, minutes | streamed (SSE), minutes; *Answer now* ends it early with what it has |
+| Model runs | **at ask time**, every time | **at authoring time only** | at authoring time *and* at generation time | at ask time, several times |
+| Typical calls | 4 (+1 for a chart) | 2 per drafted tile (SQL, then chart), **0** per refresh | 1 outline + 1 per block + 1 per section + 1 summary | 1 plan + 1–2 per step + 1 answer (+1 chart) |
+| SQL comes from | `generate`, fresh per question | `dashboard_tiles.sql`, stored | `report_blocks.sql`, stored | `generate`, fresh per **step** |
+| Guard entry point | `validate` node (a taught question lands there too) | `execute_saved_sql` | `execute_saved_sql` | the same `validate` node, once per statement — the **sixth** entry point |
+| Result values → model? | `present`, per policy | **never** | `narrate`, per policy (and `NONE`/`AGGREGATE` are refused outright) | per step through `disclose()`; the reviser and writer, per policy — neither is called under `NONE`/`AGGREGATE` |
+| Repair loop | 1, shared by guard/DB/checks | 1, at draft time only | 1, at block-check time only | per step, each repair spending the query budget |
+| Failure posture | the run fails, with an error artifact | a per-tile `ERROR` **value** | per section; the run's status is **derived** | a failed step is **evidence**; only the plan can fail the run |
+| Persists | `runs`, `run_steps`, `messages`, artifacts | `dashboard_tile_cache` | `report_runs` + block/section result rows | chat's, plus an `ANALYSIS` artifact and every sub-query in `generated_queries` |
 
 ### 0.2 What all three sit on
 
 Four pieces of machinery are shared, and every claim about safety in this
-product is a claim about one of them:
+product is a claim about one of them. The deep pipeline sits on all four
+unchanged, which is why it has no section of its own below:
 
 1. **`LLMGateway`** — six methods, one adapter (nodes see only the first
    three: `complete`, `stream`, `structured`; `probe`, `embed` and
@@ -65,12 +67,14 @@ product is a claim about one of them:
 2. **The SQL guard** ([`app/sqlguard/`](../../backend/app/sqlguard)) — parse with
    SQLGlot, walk the AST against an allowlist, resolve every name against the
    connection's stored snapshot, rewrite with the row `LIMIT`. **Fails closed:
-   an unknown node type is a rejection, not a warning.** Five entry points —
+   an unknown node type is a rejection, not a warning.** Six entry points —
    `validate` (chat), `execute_saved_sql` (tiles and report blocks),
    `sql_draft_service` (the draft and hand-written roads), `dashboard_service`
-   (tile save, and importing a dashboard file), and `knowledge/validate`
-   (a taught template, on save and on every use) — and **none of them is
-   privileged**. `sql_origin` is provenance, never trust.
+   (tile save, and importing a dashboard file), `knowledge/validate`
+   (a taught template, on save and on every use), and a deep run's
+   sub-queries (the same `validate` node, once per statement,
+   [security.md §4.10](security.md#410-a-deep-runs-sub-queries-are-the-sixth-entry-point))
+   — and **none of them is privileged**. `sql_origin` is provenance, never trust.
 3. **Disclosure** — the same policy governs three things at *render* time, never
    only at write time: `disclose()` (the result), `HintBudget` (per-column
    content hints in the schema block), `disclose_history()` (the transcript).
@@ -129,6 +133,14 @@ repair only while `repair_count < max_repairs` — so the loop was counting to
 the same number twice. That duplication was not theoretical: `deadline_at` was
 enforced on the chat path and inert on the draft path until someone noticed.
 
+**The deep graph is the region's third builder.** `DEEP_GRAPH` wires the same
+`scope → retrieve → generate ⇄ validate → execute → inspect` road once per
+step, with the chat nodes' own functions and `_adapt`, and adds four nodes of
+its own around it — `plan`, `step`, `compute`, `synthesize`. What it changes
+is where a give-up goes (to `compute`, closing the step rather than the run)
+and whether a repair is allowed (never past the budget or after *Answer now*).
+See [pipeline-deep.md §3](pipeline-deep.md#3-the-graph).
+
 ### 0.4 Every place a model is called, in the whole product
 
 | # | Call site | Gateway method | Prompt | Fires when |
@@ -145,6 +157,9 @@ enforced on the chat path and inert on the draft path until someone noticed.
 | 10 | report section prose | `complete` | `REPORT_SECTION_SYSTEM` / `_USER` | once per section per generation |
 | 11 | report summary | `complete` | `REPORT_SUMMARY_SYSTEM` / `_USER` | once per generation |
 | 12 | `scope` | `complete` | `SCOPE_SYSTEM`, or `SCOPE_SYSTEM_WITH_CURRENT` after a turn that retrieved something | an analytical chat run **or draft** on a connection with saved sections — and **not** when the asker chose a section themselves |
+| 13 | deep `plan` | `structured(AnalysisPlan)` | `DEEP_PLAN_SYSTEM` / `_USER` | every deep run |
+| 14 | deep step revision (`_revise`) | `structured(StepRevision)` | `DEEP_REVISE_SYSTEM` / `_USER` | a deep step whose dependencies all answered, under `SAMPLE`/`FULL` |
+| 15 | deep `synthesize` | `stream` | `REPORT_SECTION_SYSTEM` / `_USER` (#10's prompt, one result per step) | the end of a deep run with an answered step, under `SAMPLE`/`FULL` |
 | — | capability probe | `complete` | fixed test prompt | saving an LLM config — **sends no customer data** |
 
 [security.md §2](security.md) analyses what each one *sends*. The two tables

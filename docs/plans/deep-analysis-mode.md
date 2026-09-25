@@ -5,8 +5,9 @@
 > §0.3's number is still **0.42**, the middle band; nothing has moved it. The
 > override is recorded here rather than the gate being re-read as open: the mode
 > stays behind `deep_enabled = False`, and no deep number may be quoted as
-> evidence the mode *works* until §0.3's threshold is met. Phases 4–8 are
-> complete (**79 of 85**); 9 (documentation) is open. Written 2026-09-22
+> evidence the mode *works* until §0.3's threshold is met. **All ten phases
+> are complete (85 of 85)**, and the mode ships off. The built system is
+> described in [reference/pipeline-deep.md](../reference/pipeline-deep.md). Written 2026-09-22
 > against `main`. The argument for *why* lives in
 > [research/deep-analysis-mode.md](../research/deep-analysis-mode.md) — read it
 > first; this document does not re-argue it. The feature is
@@ -1068,14 +1069,19 @@ non-capability holder cannot start one, and both facts are in the audit log.
 > `detail->>'reason'`; nothing has been refused yet, because nothing can start a
 > deep run while `deep_enabled` is off.
 
-### 12.11 Phase 9 — Documentation · **0 / 6**
+### 12.11 Phase 9 — Documentation · **6 / 6** ✅
 
-- [ ] `docs/reference/pipeline-deep.md` — the fourth pipeline, to the same shape as the other three
-- [ ] `pipeline-chat.md §0` maps four pipelines
-- [ ] `security.md` — the sixth entry point, and what it is not exempt from
-- [ ] `status.md` §2 and §5 — the deferral closed, with the date and the number that closed it
-- [ ] `decisions.md` — D1–D6 from §0.2
-- [ ] `docs/README.md` index and routing table, and `CLAUDE.md`'s map
+- [x] `docs/reference/pipeline-deep.md` — the fourth pipeline, to the same shape as the other three: what a run is, who may start one and how far it may go, the graph, each node, the control-flow rules and *Answer now*, every event and artifact, **every way it ends with its code**, prompt versioning and the one real run, what it deliberately does not have, and its known gaps
+- [x] `pipeline-chat.md §0` maps four pipelines — the side-by-side table gains a Deep column, §0.2's guard names six entry points, §0.3 names `DEEP_GRAPH` as the repair region's third builder, and §0.4 gains the three deep call sites
+- [x] `security.md` — the sixth entry point, and what it is not exempt from: **§4.10** (the guard, name resolution and the row cap per statement; read-only and the timeout; `disclose()` per step; the re-check at execution and the snapshotted budget; provenance in `generated_queries`; and no model arithmetic). §2 also gains the three deep call sites (#16–#18, eighteen use cases across twenty-one call sites), and "result values reach two of the fifteen" is now **four of the eighteen**, with how a deep run discloses per step. The rows had been missing since Phase 4, the drift §2's own note warns about
+- [x] `status.md` §2 and §5 — **honestly, not as written.** No number closed the deferral: the gate measured 0.42 and the phases were built over it. So §2 gains a row naming that, §3 ("built, and shipped off") gains the mode with **0.55** as what unblocks it, §5 splits the row — the deferral to *build* closed 2026-09-24 on the owner's instruction, the deferral to *enable* stands on the same number — and §6's gate bullet says Phases 4–9 were built anyway without re-reading the gate
+- [x] `decisions.md` — D1–D6 from §0.2, as a new §6a with two more rows (the budget fails closed; the mode is built and off). Two existing rows are marked **Evolved**: five guard doors → six, three pipelines → four
+- [x] `docs/README.md` index and routing table, and `CLAUDE.md`'s map — a routing row and the reference list (eighteen documents) point at `pipeline-deep.md`, and the plan's index row reads 85/85 and off. `CLAUDE.md`'s pipelines section maps four with a Deep column and six guard doors; the code map names `nodes/deep.py`, `evidence.py`, `signals.py`, `deep_budget` and `deep_plan`, and `app/analysis/` is no longer described as inert. `graph.py`'s comment that `DEEP_GRAPH` is "reachable from nothing … until Phase 6" is corrected in the same commit
+
+> **Owed, and outside this phase's six boxes:** [llm-calls.md](../reference/llm-calls.md)
+> writes out every model call's prompt verbatim and does not yet carry the
+> three deep ones. Recorded as gap 4 in pipeline-deep.md §10 rather than ticked
+> past.
 
 ### 12.12 Totals
 
@@ -1090,13 +1096,14 @@ non-capability holder cannot start one, and both facts are in the audit log.
 | 6 — The surface | 12 | 12 |
 | 7 — Scoring | 7 | 7 |
 | 8 — Governance | 6 | 6 |
-| 9 — Documentation | 0 | 6 |
-| **Total** | **79** | **85** |
+| 9 — Documentation | 6 | 6 |
+| **Total** | **85** | **85** |
 
 ### 12.13 Change log
 
 | Date | What changed |
 |---|---|
+| 2026-09-25 | **Phase 9 complete, 6/6 — the plan is done, 85/85, and the mode ships off.** `reference/pipeline-deep.md` is the fourth pipeline's reference, written to the other three's shape. `pipeline-chat.md` §0 maps four pipelines; `security.md` gains §4.10 (the sixth entry point and what it is not exempt from) and the three deep call sites, missing from §2 since Phase 4; `decisions.md` records D1–D6; the docs index, routing table and `CLAUDE.md` point at it. **`status.md` could not record the deferral as "closed by a number", because no number closed it** — it records the override instead, and 0.55 as what enables the mode. Owed: the deep prompts in `llm-calls.md`. | 85 of 85 |
 | 2026-09-24 | **Phase 8 complete, 6/6.** Who may go deep, and how far. `deep.run` — the twentieth capability, seeded by `0042` to Administrator alone — is asked when a deep question is sent or retried; a connection's deep budget (`GET`/`PUT /connections/{id}/deep-budget`, `manage`) narrows the installation's ceiling and never widens it; a zero refuses with `E_DEEP_REFUSED` rather than starting a smaller run. **The budget is snapshotted onto the run** and the executor reads nothing else, so no replica, takeover or later edit reaches a default, and a DEEP row with no usable snapshot fails `E_DEEP_BUDGET`. Both refusals and every change are audit rows, and the refusal is returned rather than raised so its row commits. The Policy tab gains the five numbers. `make test` 3,512 green, `make guard` 140, `lint-imports` 9/9, `authz-check` clean, `npm test` 22 suites + build green. | 79 of 85 |
 | 2026-09-22 | Written. No phase started. |
 | 2026-09-24 | **Phase 7 complete, 7/7.** `--suite deep_v1 --mode deep` runs the frozen set through `DeepPipeline` on the real fixture and prints a scorecard of the five provider-free numbers — guard pass rate, execution success, claim traceability, plan adherence, cost per answer — pooled over statements and claims, with answer correctness stated as not scored. The interruption rate is `services.deep_plan.interruption()` and its SQL twin in eval.md. First real run, one question on Flash (`bc3bd6d3`): 100% / 100% / **25.0%** / 60%, **547 s, cut by the soft deadline at step 3**, and an answer that attributed a calendar effect to channels — both recorded above as findings. The full twenty-question run was in flight when this landed. `make test` green. | 73 of 85 |

@@ -869,9 +869,9 @@ def deep_recursion_limit(run: DeepState) -> int:
 
 CHAT_GRAPH = _build_chat().compile(name="chat")
 DRAFT_GRAPH = _build_draft().compile(name="draft")
-#: Compiled at import like the other two, and reachable from nothing in the
-#: product until Phase 6 — `settings.deep_enabled` is False and no caller
-#: outside this package names `DeepPipeline`.
+#: Compiled at import like the other two. Reached only through `run_service`,
+#: for a run whose depth is DEEP — which nothing can create while
+#: `settings.deep_enabled` is off (docs/reference/pipeline-deep.md).
 DEEP_GRAPH = _build_deep().compile(name="deep")
 
 

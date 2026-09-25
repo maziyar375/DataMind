@@ -35,9 +35,10 @@ agent — about to *change* it.
 | --- | --- | --- |
 | `sqlguard/`, `disclosure.py`, `HintBudget`, or adding an LLM call site | [reference/security.md](reference/security.md) | Every claim names the module that enforces it, and states its limits |
 | **Anything permission-shaped — any endpoint at all** | [reference/access-control.md](reference/access-control.md) | **The rulebook.** Seven concepts, five invariants, the algorithm verbatim, three checklists. Short on purpose; `test_authz_conformance.py` and `make authz-check` enforce the mechanical half |
-| A pipeline node, a prompt, the routing | [reference/pipeline-chat.md](reference/pipeline-chat.md) | The chat run node by node — and §0 maps all three pipelines |
+| A pipeline node, a prompt, the routing | [reference/pipeline-chat.md](reference/pipeline-chat.md) | The chat run node by node — and §0 maps all four pipelines |
 | A tile's SQL or its refresh | [reference/pipeline-dashboard.md](reference/pipeline-dashboard.md) | Authoring (model, once) vs refresh (no model, forever), with every error code |
 | Outline, feasibility, report generation | [reference/pipeline-report.md](reference/pipeline-report.md) | The four report flows node by node |
+| Deep analysis — the plan, the step loop, *Answer now*, `deep.run`, a connection's deep budget | [reference/pipeline-deep.md](reference/pipeline-deep.md) | The fourth pipeline node by node, every error code, what it refuses before it starts — and why it ships **off** |
 | A prompt, or anything a model is sent | [reference/llm-calls.md](reference/llm-calls.md) | Every unique call: trigger, gateway method, the verbatim prompts, what fills each placeholder, what happens when it fails |
 | Provider rows, model parameters, embedder configuration | [reference/llm-providers.md](reference/llm-providers.md) | The two creatable kinds, the parameter catalog, and the three rules about what reaches the wire |
 | Anything under `frontend/src/` | [reference/frontend.md](reference/frontend.md) | The shell, what each section owns, the breakpoints, and the design-system rules nothing in CI enforces |
@@ -54,7 +55,7 @@ agent — about to *change* it.
 
 ## `reference/` — how the built system works
 
-The authoritative description of what exists. Seventeen documents.
+The authoritative description of what exists. Eighteen documents.
 
 **The system:** [codebase.md](reference/codebase.md) ·
 [frontend.md](reference/frontend.md) ·
@@ -62,10 +63,11 @@ The authoritative description of what exists. Seventeen documents.
 [access-control.md](reference/access-control.md) ·
 [cross-replica.md](reference/cross-replica.md)
 
-**The three pipelines** — one set, written to the same shape:
-[pipeline-chat.md](reference/pipeline-chat.md) (which also maps all three in
+**The four pipelines** — one set, written to the same shape:
+[pipeline-chat.md](reference/pipeline-chat.md) (which also maps all four in
 its §0) · [pipeline-dashboard.md](reference/pipeline-dashboard.md) ·
-[pipeline-report.md](reference/pipeline-report.md)
+[pipeline-report.md](reference/pipeline-report.md) ·
+[pipeline-deep.md](reference/pipeline-deep.md)
 
 **The model layer:** [llm-calls.md](reference/llm-calls.md) (what is sent) ·
 [llm-providers.md](reference/llm-providers.md) (how a provider is configured)
@@ -99,7 +101,7 @@ against, and carrying a dated record of what changed while it was. Read
 | [token-accounting.md](plans/token-accounting.md) | **Built** — all six phases, migration `0023`. Usage travels by sink; tokens and cost are counted rather than assumed, per node, per operation, per user |
 | [langgraph-migration.md](plans/langgraph-migration.md) | **Live.** Phases 0–3 and 6 done; Phases 4 (checkpointing) and 5 (durable clarification) argued and **declined**, each with the measurement that decided it. Read it before moving anything else onto LangGraph |
 | [hybrid-retrieval.md](plans/hybrid-retrieval.md) | **Built, 20/20 — and unmeasured.** mvp2 **B2**, the last unbuilt Tier 1 row. Phase 1 (2026-09-23) made the schema's *prose* rank tables — DDL comments and the semantic layer's descriptions, IDF-weighted against the question — on the one branch that has to choose; `PROMPT_VERSION` → v12. Phase 2 (`0039`) added one vector per table over that same text, blended `max(lexical, cosine)` and gated on a pinned embedding model, with its own worker and its own eval arm. Phase 3 made it visible: which signal chose each table, per run; the dropped tables named rather than counted; the index's freshness where the pin already lives. **The one box still open is the eval arm**, which is a provider run rather than code. Two divergences from mvp2 §B2 are argued in §0.2: **no `pgvector`**, and `include_db_comments` governing ranking as well as rendering. §11 is the ledger, and **the arm it owes is unrun** |
-| [deep-analysis-mode.md](plans/deep-analysis-mode.md) | **Phases 0–3 done, 31/85 — and the gate did not open.** A second, opt-in answer mode in chat: a declared plan, several guarded queries, deterministic contribution arithmetic, and a report whose every claim resolves to its SQL. **Phase 0 was the gate** — it ran on 2026-09-22 and returned **0.42**, §0.3's middle band, so Phases 1–3 (cache tokens, `app/analysis/`, claim citations) shipped and **Phases 4–9 are blocked** until [mvp2](plans/mvp2.md) A1/A5/B2 move the number. §12 is the ledger. Argued in [research/deep-analysis-mode.md](research/deep-analysis-mode.md) |
+| [deep-analysis-mode.md](plans/deep-analysis-mode.md) | **All ten phases done, 85/85 — built over a gate that did not open, and shipped off.** A second, opt-in answer mode in chat: a declared plan, several guarded queries, deterministic contribution arithmetic, and an answer whose every figure cites its step. **Phase 0 was the gate** — it ran on 2026-09-22 and returned **0.42**, §0.3's middle band; Phases 4–9 were built anyway on the owner's instruction, and `deep_enabled` stays false until the number reaches 0.55. The built system is [reference/pipeline-deep.md](reference/pipeline-deep.md); §12 is the ledger. Argued in [research/deep-analysis-mode.md](research/deep-analysis-mode.md) |
 
 ## `research/` — arguments, not descriptions
 

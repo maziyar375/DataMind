@@ -39,6 +39,7 @@ Newest first. Each row is complete unless the **Caveat** column says otherwise.
 
 | Strand | Landed | Caveat | Record |
 | --- | --- | --- | --- |
+| **Deep analysis** (mvp2 **F3**/**F4**) — a second, opt-in answer mode in chat: a declared plan of up to five sub-questions, each answered by one ordinary guarded query, the arithmetic computed by `app/analysis/` rather than narrated, and a short answer whose every figure cites its step; the reader watches the plan fill in and can press *Answer now*. Governed: `deep.run` (Administrator only by default) and a per-connection budget that narrows the installation's ceiling, is snapshotted onto each run, and refuses at zero rather than running smaller. The fourth pipeline — [reference/pipeline-deep.md](reference/pipeline-deep.md) | 2026-09-22 → 09-24, [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) **all ten phases**, migrations `0037`, `0038`, `0041`, `0042` | **Built over its own gate, and shipped off** (§3). §0.3 said Phases 4–9 wait until single-shot accuracy reaches 0.55; it is **0.42**, and they were built on the owner's instruction. **No deep number is evidence the mode works.** The one real run (Flash, one question) was cut by its soft deadline at step 3 of 5 and attributed a calendar effect to channels. The running stack needs `make migrate` | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §12 |
 | **Retrieval says which signal chose each table** — `runs.retrieval_signals` (`0040`) records, per run, how many of the tables the model saw were chosen by their own name, a curator's word, the conversation, a column, a join, a description or its vector — counted by the same function that ranked them. The tables the budget cut are **named** in the step trail, not only counted; and the knowledge panel's one pin now reports both indexes it feeds | 2026-09-23, [plans/hybrid-retrieval.md](plans/hybrid-retrieval.md) **Phase 3** (mvp2 **B2**) | The running stack needs `make migrate`. **NULL on three of the four strategies** deliberately — they send everything, the section, or whatever spends the budget, so none of them chose. Read off this database the day it landed: 3 recorded runs, all `FULL_SNAPSHOT`, 13 tables — so **every run here will write NULL**, and the instrument is correct while this install cannot exercise it | [plans/hybrid-retrieval.md](plans/hybrid-retrieval.md) §11 |
 | **Retrieval can find a table by what its prose *means*** — where a connection has an embedding model pinned, one vector per table over the same sentences Phase 1 scores (`schema_table_vectors`, `0039`), written by a worker on its own cadence and never on a request; `retrieve` embeds the question once and takes `max(lexical, rescaled cosine)`, so a question sharing no word with a table's description can still reach it. **Availability is a capability, not a switch**: no pinned model is no index | 2026-09-23, [plans/hybrid-retrieval.md](plans/hybrid-retrieval.md) **Phase 2** (mvp2 **B2**) | Migrations `0039`/`0040` were applied to the local database on 2026-09-23 and the API restarted. **Both connections here have `text-embedding-3-small` pinned at 256 dimensions**, so the hourly pass *will* build this index — 21 tables for `sales`, 13 for Aurora — the first time it runs. **Those vectors will then sit unused on this install**, because a vector can only change a ranking on `RANKED_MATCH` and both databases fit the 50,000-char budget whole. **Unmeasured**: the arm exists (`--schema-vectors`, added to the runner for it) and has not been run | [plans/hybrid-retrieval.md](plans/hybrid-retrieval.md) §11 |
 | **The schema's own sentences choose tables** — a question phrased in none of the words the schema spells now reaches the table somebody *wrote about*: table and column DDL comments, plus the semantic layer's descriptions, grains, value meanings and glossary meanings, are scored against the question by IDF-weighted overlap (`app/pipeline/relevance.py`) and rank a table above the ones that are merely large. Nothing is read by both this and A5's name index. `include_db_comments` governs ranking as well as rendering. `PROMPT_VERSION` v11 → v12 | 2026-09-23, [plans/hybrid-retrieval.md](plans/hybrid-retrieval.md) **Phase 1** (mvp2 **B2**) | **Same branch limit as A5** — only `RANKED_MATCH`, above roughly 80 tables — so it changes nothing on either database in this install. **Unmeasured**: the arm is four cells of one grid with A5's (`--retrieve-budget 8000`, neither / `--semantic on` / `--comments` / both) and has not been run, so no claim that it improved retrieval is falsifiable yet. A connection with no comments and no layer ranks byte-identically to v11, asserted at the function *and* at the node. The embeddings half of B2 is unbuilt | [plans/hybrid-retrieval.md](plans/hybrid-retrieval.md) §11 |
@@ -84,14 +85,16 @@ prices were removed the same day.
 
 ## 3. Built, and shipped **off**
 
-Three switches are off by default, and **all three wait on the same thing: a
-provider key this environment does not have.** None of them is blocked on code.
+Four switches are off by default. **Three wait on the same thing — a
+provider key this environment does not have — and the fourth waits on a
+number.** None of them is blocked on code.
 
 | Off | Switch | What unblocks it |
 | --- | --- | --- |
 | **Few-shot injection** — taught examples in the generator prompt | `knowledge_examples_enabled`, default false | Held-out accuracy measured not-worse. `PROMPT_VERSION` is v10 (v9 added the slot; v10 changed no wording) and the empty slot renders v8's bytes exactly, so off is not a half-state |
 | **The embedding matcher** — searching the knowledge store by meaning | `embedding_model`, default empty | A measured recall delta against `pg_trgm`, which needs no provider and is the default |
 | **Phase 0's three eval baselines** — accuracy layer-off, layer-on, recall at a budget that can miss | — | Three runs against a real provider. The table is in [reference/eval.md](reference/eval.md) §6 with the commands and empty cells |
+| **Deep analysis** — the fourth pipeline ([reference/pipeline-deep.md](reference/pipeline-deep.md)) | `deep_enabled`, default false; and `deep.run`, held by Administrator alone | **Single-shot execution accuracy ≥ 0.55** on `sales_v1`, layer on — [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.3's threshold, written before the number existed. It is **0.42**. Until it moves, turning the switch on ships a longer, more confident, more expensive wrong answer |
 
 The last one gates the first: the plan does not allow the few-shot flip to be
 argued until the baselines exist, because it is the *numbers* that decide it.
@@ -132,7 +135,8 @@ when the trigger fires, the deferral is reopened rather than re-argued.
 | Row-level security | Named in a deal; **needs dashboard filters first** | [plans/user-management-and-access-control.md](plans/user-management-and-access-control.md) §0.2 |
 | Workspaces / folders, nested teams, delegated granting, time-boxed grants | Each has a written trigger | [plans/user-management-and-access-control.md](plans/user-management-and-access-control.md) §0.2 |
 | Warehouse connectors | A named customer, not a roadmap slot | [plans/mvp2.md](plans/mvp2.md) E4 |
-| Multi-step "deep dive" analysis, root-cause / key drivers, proactive digests | **Trigger tested 2026-09-22 and it did not fire — 0.42, the middle band of [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.3.** Its Phases 1–3 shipped anyway because they stand alone; Phases 4–9 wait on A1/A5/B2 | [plans/mvp2.md](plans/mvp2.md) Tier 3, [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) |
+| Proactive digests | Deep analysis was deferred beside it and is now built (§2, §3); digests remain Tier 3 | [plans/mvp2.md](plans/mvp2.md) Tier 3 |
+| **Enabling** multi-step "deep dive" analysis, root-cause / key drivers | **The deferral to *build* it closed on 2026-09-24 — not by a number.** The trigger was tested on 2026-09-22 and did not fire (**0.42**, the middle band of [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.3); Phases 4–9 were built over it on the owner's instruction, and the override is recorded in the plan rather than the gate re-read. What stays deferred is **turning it on**, and its trigger is the same number reaching **0.55** — moved by A1/A5/B2, not by this mode | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.3, §12 |
 | Scheduled reports | Needs sharing first — a delivered report is a shared report | [plans/mvp2.md](plans/mvp2.md) F2 |
 | Entity/value dictionaries | Needs its own disclosure-ladder decision in [reference/security.md](reference/security.md) | [plans/mvp2.md](plans/mvp2.md) B3 |
 | Rename the `raymand` package → `datamind` | Before an open-source push; **never** incidentally | [plans/mvp2.md](plans/mvp2.md) §1.11 |
@@ -167,10 +171,12 @@ treated as security.
   [plans/deep-analysis-mode.md §0.3](plans/deep-analysis-mode.md) wrote three
   thresholds down before the number existed. The number it names — execution
   accuracy at v10 with the layer on — came back **0.42**, which is the middle
-  band: **Phases 1–3 ship, Phases 4–9 wait.** Phases 1, 2 and 3 have landed
-  (cache-token accounting, `app/analysis/`, claim→SQL citations); Phase 4
-  onward is blocked until [plans/mvp2.md](plans/mvp2.md) A1/A5/B2 move the
-  number, at which point that plan is **re-read, not re-argued**.
+  band: **Phases 1–3 ship, Phases 4–9 wait.** Phases 1, 2 and 3 landed
+  (cache-token accounting, `app/analysis/`, claim→SQL citations). **Phases
+  4–9 were then built anyway, 2026-09-23 → 24, on the owner's instruction** —
+  the mode exists and is off (§3). That does not re-read the gate: until
+  [plans/mvp2.md](plans/mvp2.md) A1/A5/B2 move the number to 0.55, no deep
+  number may be quoted as evidence the mode works, and the switch stays off.
 - **Catalog comments: 40.0% uncommented vs 36.0% commented**, 50 questions,
   DeepSeek V4 Flash. Two questions inside a twelve-question variance.
   **Do not write "comments improved accuracy" anywhere** — no run says so. What

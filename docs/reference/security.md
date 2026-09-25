@@ -55,7 +55,7 @@ Stated plainly so nobody assumes otherwise:
 
 ## 2. Every place data leaves for a model provider
 
-There are **fifteen use cases**, across eighteen call sites, and no others. The
+There are **eighteen use cases**, across twenty-one call sites, and no others. The
 dependency rule forbids importing `litellm` outside `app/infra/llm/`, and CI
 greps for violations, so this list cannot silently grow.
 
@@ -76,6 +76,9 @@ greps for violations, so this list cannot silently grow.
 | 13 | Embed a question | the six-hourly index pass; **every analytical question**, on a connection with an embedding model pinned | `services/knowledge_service.py` — `_embedder()`:708, `index_embeddings()`:839 |
 | 14 | Choose a section | every analytical question — chat **and** a tile or block draft — on a connection with **saved sections**, unless the asker chose one themselves (*Ask within…*, which makes no call); never otherwise | `pipeline/nodes/__init__.py` — `scope()`:423 |
 | 15 | Embed a table's prose, and a question against it | the hourly schema-index pass; and **every analytical question that reaches `RANKED_MATCH`** — over budget, so not on a database that fits — on a connection with an embedding model pinned *and* a current vector to compare against | `services/retrieval_index.py` — `index_schema_vectors()`, `question_embedder()` |
+| 16 | Plan a deep analysis | every **deep** run — a reader chose *Deep*, holds `deep.run`, and the installation has the mode on | `pipeline/nodes/deep.py` — `plan()`:107 |
+| 17 | Sharpen a deep step | a deep step that names earlier steps it depends on, once they have all answered, under `SAMPLE`/`FULL` only | `pipeline/nodes/deep.py` — `_revise()`:159 |
+| 18 | Write a deep answer | the end of every deep run with at least one step answered, under `SAMPLE`/`FULL` only | `pipeline/nodes/deep.py` — `synthesize()`:407 |
 
 **#15 is a different index from #13, on the same credentials.** That one
 embeds *questions somebody taught*; this one embeds *what is written about a
@@ -84,7 +87,7 @@ same `database_connections.embedding_model` pin, so turning one on turns on the
 other — which is stated here because it is the kind of thing a reader would
 otherwise have to discover from a bill.
 
-**Fifteen and not sixteen** because #8 is a use case without a call site: a
+**Eighteen and not nineteen** because #8 is a use case without a call site: a
 draft reuses the *node* that would have made the call anyway, which is the whole
 point of §0.3 in [pipeline-chat.md](pipeline-chat.md) — a tile's statement is written
 against the same prompt, the same guard and the same budget as a chat answer.
@@ -111,6 +114,15 @@ Two model interactions send **no customer data at all**: the capability probe
 in `api/v1/llm_configs.py`, a fixed test prompt, and `probe_embedding` in
 `knowledge_service.set_embeddings()`, which embeds the string `ok` to *measure*
 a provider's vector width rather than assume it from a model name.
+
+> **Changed:** #16–#18 are deep analysis
+> ([pipeline-deep.md](pipeline-deep.md)), added 2026-09-24 — the mode existed
+> from Phase 4 and these rows did not, which is the drift the note on #10–#12
+> below warns about. A deep run also makes **#1, #4, #6 and #14 once per step**
+> through the ordinary nodes, so a five-step analysis is five generate calls,
+> not one; those are the same call sites, sending what they send in chat. What
+> is new is below in §2.1. Off by default twice over: `deep_enabled` is
+> `False`, and `deep.run` is seeded to Administrator alone (§6).
 
 > **Changed:** #6 gained a second trigger. Choosing a chart used to fire only
 > at the end of a chat run; a **dashboard tile draft** now asks it too, so that
@@ -196,16 +208,32 @@ Common building blocks, both governed by the disclosure policy (§3):
 | 12 | Report summary | ✅ the request | ❌ | ❌ | ❌ | **Prose only** — the sections' own paragraphs |
 | 13 | Embed a question | ✅ **masked** | ❌ | ❌ | ❌ | **No prompt at all.** Table names, column names, declared values and literals are replaced with `<table>`/`<column>`/`<value>` before the text leaves (§4.7) |
 | 14 | Choose a section | ✅ | ❌ section names and descriptions only | ❌ | ❌ | Text a person wrote (or accepted from a proposal) about the schema — the same rung as a catalog comment (§2.5) |
+| 16 | Plan a deep analysis | ✅ | ✅ | ✅ | ❌ | **Never sees results** — it runs before any query. The schema block is #4's, rendered under the same policy and narrowed the way #2 narrows one |
+| 17 | Sharpen a deep step | ✅ the step's | ❌ | ❌ | **✅ per policy** | The `disclose()`d rows of the steps it depends on, and figures computed from them **only when every row behind them was disclosed**. Not called under `NONE`/`AGGREGATE`; fails open to the step as written |
+| 18 | Write a deep answer | ✅ | ❌ | ❌ | **✅ per policy** | The same shape as #11 — `reports/narrate.py`'s section prompt, one numbered result per step, same computed-figures rule as #17. Under `NONE`/`AGGREGATE` **no model is called**: the product writes the answer itself |
 
 The single most important row is **#4**. The node that writes SQL never
 receives result data under any policy — it works from schema, question, and
 transcript alone. That holds for every caller of it, including a tile draft and
 a report block.
 
-**Result values reach exactly two of the fifteen**: `present` (#5) and a report
-section (#11). Both go through the same `disclose()`, and neither is reachable
-without it — a report additionally refuses to run at all under `NONE` or
-`AGGREGATE` (§2.3). Everything else works from structure, shape, or prose.
+**Result values reach exactly four of the eighteen**: `present` (#5), a report
+section (#11), and a deep run's reviser and writer (#17, #18). All four go
+through the same `disclose()`, and none is reachable without it — a report
+additionally refuses to run at all under `NONE` or `AGGREGATE` (§2.3), and a
+deep run calls neither #17 nor #18 under those two. Everything else works from
+structure, shape, or prose.
+
+**A deep run discloses per step, at the moment the step closes** — `compute`
+calls `disclose()` on that step's result before anything downstream can read
+it, and #17 and #18 read only what it returned (`pipeline/evidence.py`). A
+figure `app/analysis/` computed from a result reaches a prompt only when the
+model was given **every** row it was computed from, because a total over rows
+the policy withheld would carry their values out. The answer #18 writes is
+stored as the assistant message and replayed to the next turn by
+`disclose_history`, so the product-written fallback applies the same rule to
+what *it* writes: `test_deep_disclosure.py` scans every prompt for sentinel
+rows, and is proven against a deliberately broken `disclose()`.
 
 **#2 sends the schema block and nothing else new.** A schema question is
 answered from structure and meaning: the same `RetrievedContext.render` block
@@ -1022,6 +1050,42 @@ three things are specific to this one.
 Availability is a capability rather than a switch — no pinned model is no index
 — and every failure path is the lexical score, six of them, each with a test in
 `tests/unit/test_retrieval_vectors.py`. No rung of §3's ladder moves.
+
+### 4.10 A deep run's sub-queries are the sixth entry point
+
+A deep analysis ([pipeline-deep.md](pipeline-deep.md)) turns one question into
+up to five sub-questions, and each becomes a statement — so it multiplies
+generated SQL per question by five to ten. **Every one of them walks the chat
+graph's own `validate` node through the same repair region**
+(`_add_repair_region`, now built by three graphs), which makes it the guard's
+sixth entry point and not a new door. `tests/unit/test_deep_guard.py` replays
+the whole hostile corpus through each place a deep statement can come from: a
+step's first draft, a repair after the guard refused, a repair after the
+database refused, and a step the reviser **rewrote** — the one statement in the
+product whose *question* was written by a model reading earlier results.
+
+What it is **not** exempt from, because a longer answer is exactly where an
+exemption would hide:
+
+* **The guard, name resolution and the row cap**, per statement — and the row
+  cap only narrows: `step` sets each query's cap to what the run's row budget
+  has left, never above the connection's `max_rows`.
+* **The read-only transaction and the statement timeout** — the connector is
+  the chat run's, opened once per run.
+* **`disclose()`, per step**, under the policy in force at execution (§2.1).
+* **The re-check at execution** — `select` on the connection and the model,
+  asked as the run's actor, before the first node — and, since Phase 8, a budget
+  **snapshotted onto the run** that the executor reads and nothing else (§6).
+* **Provenance.** Every sub-query lands in `generated_queries` as an ordinary
+  row, filed against the result *it* produced, so metric attribution, the
+  knowledge backlog and usage accounting see a deep run's statements exactly as
+  they see a chat run's.
+
+And one thing it cannot do at all: **no model does arithmetic.** A step's tool
+is chosen from a closed set (`SQL`, `COMPARE_PERIODS`, `CONTRIBUTION`,
+`OUTLIERS`); an unknown one closes the step as SKIPPED without spending a
+query, and the figures are computed by `app/analysis/`, which an import-linter
+contract keeps unable to reach a model or a database.
 
 ## 5. Containment underneath correctness
 

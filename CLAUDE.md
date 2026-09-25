@@ -22,7 +22,7 @@ a reference doc disagree, the reference doc is right.
 |---|---|
 | [docs/reference/security.md](docs/reference/security.md) | **read before** changing `sqlguard/`, `disclosure.py`, `HintBudget`, or adding an LLM call site |
 | [docs/reference/access-control.md](docs/reference/access-control.md) | **read before** writing any endpoint — it is the rulebook, and it is short |
-| [docs/reference/pipeline-chat.md](docs/reference/pipeline-chat.md) | **read before** changing a node; its §0 maps all three pipelines |
+| [docs/reference/pipeline-chat.md](docs/reference/pipeline-chat.md) | **read before** changing a node; its §0 maps all four pipelines |
 | [docs/reference/codebase.md](docs/reference/codebase.md) | the code-grounded tour, when the map below is not enough |
 
 ---
@@ -155,7 +155,12 @@ backend/app/
                   `users` while the all-users total joins nothing, so a
                   departed actor's spend leaves the first and stays in the
                   second. That gap is deliberate: an outer join would attribute
-                  it to whoever remains), bootstrap, policy
+                  it to whoever remains), bootstrap, policy,
+                  deep_budget (who may start a deep analysis — `deep.run` —
+                  and what one may spend on a connection: a budget that
+                  narrows the installation's ceiling, is snapshotted onto the
+                  run, and refuses at zero), deep_plan (a deep run's plan for a
+                  reader arriving late, and the interruption rate)
   pipeline/       the AI run: state.py (typed RunState), graph.py (the compiled
                   LangGraph + the node adapter), pipeline.py (the
                   AnalyticsPipeline facade over it),
@@ -168,6 +173,10 @@ backend/app/
                   about — SKIPPED, with no model call, when there are none,
                   and no call either when the asker picked one themselves in
                   the composer; what it chose is on `runs.retrieval_*`),
+                  nodes/deep.py (the deep graph's four: plan, step, compute,
+                  synthesize — docs/reference/pipeline-deep.md), evidence.py
+                  (a deep step's rows turned into figures, and into what a
+                  writer may see; pure), signals.py (*Answer now*),
                   contracts.py (the node signature),
                   metadata.py (which tables a schema question is about, and the
                   rendered fallback answer),
@@ -232,8 +241,8 @@ backend/app/
                   (z-scores at a threshold chosen by cardinality). **Refusals
                   are values, never exceptions**, and `NO_CHANGE` is the
                   commonest true answer to a *why*. Self-contained by the ninth
-                  contract, so it cannot reach a model or a database. Inert:
-                  nothing in the product calls it yet
+                  contract, so it cannot reach a model or a database. Called
+                  by one thing: a deep run's `compute` (pipeline/evidence.py)
   charts/         ChartIntent → result profile → shape fit → Vega-Lite. One file
                   (__init__.py), like pipeline/prompts/ — the budget constants
                   live at its top and `aurora` is seeded against them
@@ -530,33 +539,39 @@ joined them with Phase 1 of the learning loop.
    > is the argument behind all of it.
 
 ---
-## Three pipelines, one set of nodes
+## Four pipelines, one set of nodes
 
-There are **three** pipelines in this product, and only one of them is a state
-machine. Know which you are in before you go looking for an executor that does
-not exist. [docs/reference/pipeline-chat.md](docs/reference/pipeline-chat.md) §0 is the full map.
+There are **four** pipelines in this product. Know which you are in before you
+go looking for an executor that does not exist.
+[docs/reference/pipeline-chat.md](docs/reference/pipeline-chat.md) §0 is the full map.
 
-| | **Chat** | **Dashboard** | **Report** |
-|---|---|---|---|
-| Orchestrator | `AnalyticsPipeline` — a compiled LangGraph | a service function + `asyncio.gather` | `ReportRunExecutor` + `report_graph.py` |
-| Shape | streamed (SSE), 5–60s | request/response, sub-second on a cache hit | queued (**202**) + polled, minutes |
-| Model runs | **at ask time**, every time | **at authoring time only** | at authoring *and* generation time |
-| SQL comes from | `generate`, fresh per question | `dashboard_tiles.sql`, stored | `report_blocks.sql`, stored |
-| Guard entry | the `validate` node | `execute_saved_sql` | `execute_saved_sql` |
-| Result values → model | `present`, per policy | **never** | `narrate`, per policy (`NONE`/`AGGREGATE` refused) |
-| Failure posture | the run fails | a per-tile `ERROR` **value** | per section; run status is **derived** |
+| | **Chat** | **Dashboard** | **Report** | **Deep** (off) |
+|---|---|---|---|---|
+| Orchestrator | `AnalyticsPipeline` — a compiled LangGraph | a service function + `asyncio.gather` | `ReportRunExecutor` + `report_graph.py` | `DeepPipeline` — a compiled LangGraph that **cycles**, once per step |
+| Shape | streamed (SSE), 5–60s | request/response, sub-second on a cache hit | queued (**202**) + polled, minutes | streamed (SSE), minutes; *Answer now* ends it with what it has |
+| Model runs | **at ask time**, every time | **at authoring time only** | at authoring *and* generation time | at ask time: a plan, then per step |
+| SQL comes from | `generate`, fresh per question | `dashboard_tiles.sql`, stored | `report_blocks.sql`, stored | `generate`, fresh per step |
+| Guard entry | the `validate` node | `execute_saved_sql` | `execute_saved_sql` | the `validate` node, once per statement |
+| Result values → model | `present`, per policy | **never** | `narrate`, per policy (`NONE`/`AGGREGATE` refused) | per step through `disclose()`; no writer under `NONE`/`AGGREGATE` |
+| Failure posture | the run fails | a per-tile `ERROR` **value** | per section; run status is **derived** | a failed step is evidence; only the plan fails the run |
 
-**The guard has five entry points and none is privileged:** the `validate` node,
+**Deep analysis is built and off** (`deep_enabled = False`, and `deep.run` is
+Administrator's alone): its gate — single-shot accuracy ≥ 0.55 — measured 0.42.
+[docs/reference/pipeline-deep.md](docs/reference/pipeline-deep.md) is the
+reference, and it says why no deep number is evidence the mode works.
+
+**The guard has six entry points and none is privileged:** the `validate` node,
 `execute_saved_sql` (tiles *and* report blocks), tile save, dashboard
-import, and **knowledge templates** (save *and* every use). The hostile corpus
+import, **knowledge templates** (save *and* every use), and **a deep run's
+sub-queries** (the same `validate` node, once per statement). The hostile corpus
 is replayed through each (`test_sqlguard_hostile.py`, `test_query_service.py`,
 `test_report_guard.py`, `test_dashboard_transfer.py`,
-`test_knowledge_guard.py`). The moment one door is special, the guarantee is
-gone.
+`test_knowledge_guard.py`, `test_deep_guard.py`). The moment one door is
+special, the guarantee is gone.
 
 **`retrieve` → `generate` → `validate` is written down once.** It is one
-compiled region — `_add_repair_region` in `pipeline/graph.py` — built by both
-`CHAT_GRAPH` and `DRAFT_GRAPH`, so a stored statement anywhere in the product
+compiled region — `_add_repair_region` in `pipeline/graph.py` — built by
+`CHAT_GRAPH`, `DRAFT_GRAPH` and `DEEP_GRAPH`, so a stored statement anywhere in the product
 was written against the same schema block, the same semantic layer, the same
 `_SQL_RULES` and the same guard as a chat answer. `sql_draft_service.draft_sql`
 is the caller for both a dashboard tile and a report block. **Do not grow a
@@ -608,9 +623,10 @@ Two rules keep them honest:
 > Node by node — what each does, its exact logic, the prompts it sends, the
 > control-flow rules and the LangGraph port map:
 > **[docs/reference/pipeline-chat.md](docs/reference/pipeline-chat.md)**. Read
-> that before changing a node. The other two pipelines get the same treatment
-> in [pipeline-dashboard.md](docs/reference/pipeline-dashboard.md) and
-> [pipeline-report.md](docs/reference/pipeline-report.md).
+> that before changing a node. The other three pipelines get the same treatment
+> in [pipeline-dashboard.md](docs/reference/pipeline-dashboard.md),
+> [pipeline-report.md](docs/reference/pipeline-report.md) and
+> [pipeline-deep.md](docs/reference/pipeline-deep.md).
 
 `POST /conversations/{id}/messages` → `run_service.create_run` writes the user
 `message`, **flushes**, then the `runs` row (FK order matters), and hands off to

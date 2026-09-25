@@ -36,7 +36,7 @@ force, but its terms changed; the row says how.
 | Decision | Status | Argued in |
 | --- | --- | --- |
 | **SQL validation is AST-based and fails closed.** An unknown node type is a rejection, not a warning; names resolve against the connection's stored snapshot | Standing | [reference/security.md](reference/security.md) §4 |
-| **Every entry point to the guard is unprivileged.** Five doors — the `validate` node, `execute_saved_sql`, tile save, dashboard import, knowledge templates — and the hostile corpus is replayed through each. *The moment one door is special, the guarantee is gone* | Standing | [reference/security.md](reference/security.md) §4 |
+| **Every entry point to the guard is unprivileged.** Six doors — the `validate` node, `execute_saved_sql`, tile save, dashboard import, knowledge templates, and a deep run's sub-queries — and the hostile corpus is replayed through each. *The moment one door is special, the guarantee is gone* | Evolved — five until deep analysis (2026-09-23); the sixth is the same `validate` node, once per statement, and `test_deep_guard.py` replays the corpus through it | [reference/security.md](reference/security.md) §4 |
 | **Containment underneath correctness.** `READ ONLY` transaction where the engine has one, a read-only role plus timeout where it does not; every engine adds a statement timeout and a row cap, and each connector proves the role cannot write by trying | Standing | [reference/security.md](reference/security.md) §5 |
 | **Disclosure governs three channels, filtered at *render* time** — the result, the per-column schema hints, and the conversation history — so tightening a policy takes effect on the next question with no re-sync and no leak from the transcript | Standing | [reference/security.md](reference/security.md) §3 |
 | **A conversation is pinned to one connection**, so history can never cross disclosure policies. The model may still be swapped mid-thread | Standing | [reference/pipeline-chat.md](reference/pipeline-chat.md) |
@@ -116,7 +116,7 @@ load-bearing ones:
 
 | Decision | Status | Argued in |
 | --- | --- | --- |
-| **Three pipelines, one set of nodes.** `retrieve → generate → validate` is written down once, as one compiled region with two callers — so a stored statement anywhere was written against the same schema block and the same guard as a chat answer | Standing | [reference/pipeline-chat.md](reference/pipeline-chat.md) §0 |
+| **Four pipelines, one set of nodes.** `retrieve → generate → validate` is written down once, as one compiled region — so a stored statement anywhere was written against the same schema block and the same guard as a chat answer | Evolved — three pipelines and two callers of the region until deep analysis made it three (2026-09-23) | [reference/pipeline-chat.md](reference/pipeline-chat.md) §0 |
 | **Every error path is one of five postures** — fail closed, fail open, fail backwards, fail as a value, fail the run. *"What should this do when it breaks?"* is answered by naming the posture | Standing | [reference/pipeline-chat.md](reference/pipeline-chat.md) §4 |
 | **`describe` halts before any SQL.** A schema question sent to `generate` becomes a query against `information_schema`, which the guard always rejects | Standing | [reference/pipeline-chat.md](reference/pipeline-chat.md) §3 |
 | **`clarify` fails open** — a guessed answer shown with its SQL beats no answer — and asks at most once per exchange, enforced in the service rather than trusted to the model | Standing | [reference/pipeline-chat.md](reference/pipeline-chat.md) §3 |
@@ -132,6 +132,23 @@ load-bearing ones:
 | **A report run is not atomic** — its status is *derived* from its sections, which is what makes progressive rendering and per-section retry fall out for free | Standing | [reference/reports.md](reference/reports.md) §3 |
 | **Time windows relativize in the SQL itself**, so a report re-run months later resolves them against the database's own clock | Standing | [reference/reports.md](reference/reports.md) §4 |
 | **PDF is printed by the browser** — the charts are already SVG and the bidi is already right | Standing | [reference/reports.md](reference/reports.md) §12 |
+
+## 6a. Deep analysis
+
+The six decisions taken before the fourth pipeline was built. Its reference is
+[reference/pipeline-deep.md](reference/pipeline-deep.md); the argument is
+[research/deep-analysis-mode.md](research/deep-analysis-mode.md) §2.
+
+| Decision | Status | Argued in |
+| --- | --- | --- |
+| **D1 — An explicit mode the reader chooses, never a silent escalation.** Chat's 5–60 s answer is a feature that cannot regress; nothing turns it into a four-minute one unasked. At most a finished answer may one day *suggest* going deep | Standing | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.2 |
+| **D2 — A declared plan that may be revised, under a hard step ceiling.** Plan-and-execute is budgetable and inspectable; ReAct adapts but cannot be bounded. A revision *replaces* a step and never adds one | Standing | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.2 |
+| **D3 — A second compiled graph, not a longer chat graph.** The chat graph's straight line is load-bearing for the SSE contract; the deep loop is a cycle with a budget. *Nodes are reused; the graph is not* | Standing | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.2 |
+| **D4 — A closed set of pure functions for computation** (`app/analysis/`), no DuckDB and no Python sandbox. A sandbox is a new execution surface; a pure module over already-executed rows is not a door at all | Standing, with a trigger to revisit | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.2, §10 |
+| **D5 — The unit of work is a sub-question carrying an intent**, not a query and not a hypothesis — readable by a person, answered on the existing guarded road, and routed by its tool | Standing | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.2 |
+| **D6 — It streams; it does not poll.** Minutes long with the most interesting thing in the product to watch — the opposite case to a report | Standing | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.2 |
+| **A deep budget fails closed** — the first thing in the product that enforces rather than measures. A connection narrows the installation's ceiling and never widens it; a zero refuses rather than running smaller; the budget is snapshotted onto the run and the executor reads nothing else | Standing | [reference/pipeline-deep.md](reference/pipeline-deep.md) §2, [reference/security.md](reference/security.md) §6 |
+| **The mode is built and off.** Its gate (single-shot accuracy ≥ 0.55) measured 0.42; Phases 4–9 were built over it on the owner's instruction, and the gate was **not** re-read as open. `deep_enabled` stays false until the number moves | Standing | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.3 |
 
 ## 7. Frontend
 
