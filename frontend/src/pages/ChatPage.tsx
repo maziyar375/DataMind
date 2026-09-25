@@ -39,7 +39,7 @@
  * disclosure rule for a statement's literals must be identical, and two
  * editors are two chances to get one of them wrong.
  */
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useMatch, useNavigate } from 'react-router-dom'
 import {
   conversations, connections as connectionsApi, llmConfigs,
@@ -430,6 +430,30 @@ export default function ChatPage() {
     followRef.current = true
     el.scrollTo({ top: el.scrollHeight, behavior: glideBehavior() })
   }
+
+  // The transcript shrinks whenever the composer grows — a second line, a
+  // pasted paragraph. A reader at the end should stay at the end while that
+  // happens, or the answer they were reading slides under the box as they
+  // type. Only when already following: someone scrolled back keeps their place.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let last = el.clientHeight
+    const observer = new ResizeObserver(() => {
+      const now = el.clientHeight
+      // `instant`, not a `scrollTop` write: the write does not cancel a
+      // glide already in flight (a turn arriving, *Jump to latest*), which
+      // then finished afterwards on the end as it was *before* the box grew.
+      if (now < last && followRef.current) {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'instant' })
+      }
+      last = now
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+    // After `loading`: the page renders a spinner first, and the transcript
+    // this watches does not exist until that is gone.
+  }, [loading])
 
   // A turn arriving is worth a glide. A token is not: asking for `smooth`
   // again on every flush restarts an animation that never gets to finish, so
@@ -2280,13 +2304,30 @@ function Composer({
   const [focus, setFocus] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
 
-  // Grow the textarea to fit its content, up to a cap, then scroll.
-  useEffect(() => {
+  // Grow with the text, a line at a time, up to two-fifths of the window —
+  // then scroll inside, which is how every chat box people arrive knowing
+  // behaves. The cap follows the window rather than a fixed 160px, so a
+  // laptop gets room for a pasted paragraph and a phone keeps its transcript.
+  //
+  // `overflow-y` is decided here too: hidden while the box can still grow,
+  // so no scrollbar flashes on the line that makes it taller, and `auto`
+  // only once the text is actually taller than the cap. A layout effect, so
+  // the height lands before paint and the box never draws one line short.
+  const grow = useCallback(() => {
     const el = ref.current
     if (!el) return
+    const cap = Math.max(120, Math.round(window.innerHeight * 0.4))
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-  }, [value])
+    const full = el.scrollHeight
+    el.style.height = `${Math.min(full, cap)}px`
+    el.style.overflowY = full > cap ? 'auto' : 'hidden'
+    el.classList.toggle('is-scrolled', full > cap && el.scrollTop > 0)
+  }, [])
+  useLayoutEffect(grow, [value, grow])
+  useEffect(() => {
+    window.addEventListener('resize', grow)
+    return () => window.removeEventListener('resize', grow)
+  }, [grow])
 
   const canSend = value.trim().length > 0 && !busy && ready
   const active = focus || value.trim().length > 0
@@ -2354,7 +2395,10 @@ function Composer({
               // read as a shape rather than as a dot.
               stopping ? <Spinner size={15} /> : <Icon.Stop size={24} />
             ) : (
-              <Icon.Send size={16} />
+              // Up, not a paper plane: the arrow is what both of the products
+              // people arrive from draw here, and it says "send this up into
+              // the thread" rather than "email".
+              <Icon.ArrowUp size={18} strokeWidth={2.4} />
             )}
           </button>
     </>
@@ -2380,24 +2424,38 @@ function Composer({
           visible while it is in force.
         */}
         <div
+          className="rm-composer-box"
+          // The whole box is the field: a click on its padding or on the
+          // empty stretch of the tool row puts the caret in the text, as it
+          // does in the products this follows. Controls keep their clicks.
+          onMouseDown={(e) => {
+            const target = e.target as HTMLElement
+            if (target === e.currentTarget || target.classList.contains('rm-composer-controls')) {
+              e.preventDefault()
+              ref.current?.focus()
+            }
+          }}
           style={{
             display: 'flex',
             flexDirection: tools ? 'column' : 'row',
             alignItems: tools ? 'stretch' : 'flex-end',
-            gap: tools ? 8 : 10,
+            gap: 10,
             background: 'var(--panel)',
             // Deep keeps an accent edge at rest, so a thread left in the
             // minutes-long mode says so before anything is typed into it.
             border: `1px solid ${
-              focus ? 'var(--accent)' : deep ? 'var(--accent-border)' : 'var(--border-strong)'
+              focus ? 'var(--accent-border)' : deep ? 'var(--accent-border)' : 'var(--border-strong)'
             }`,
-            borderRadius: tools ? 20 : 22,
-            padding: tools ? '12px 10px 10px 12px' : '10px 10px 10px 18px',
+            borderRadius: 24,
+            padding: tools ? '14px 10px 10px 12px' : '10px 10px 10px 18px',
+            cursor: 'text',
+            // Calm on focus: a soft ring and a deeper shadow, and no lift. The
+            // box used to rise a pixel when focused, which on a box that now
+            // grows as you type reads as the field jumping.
             boxShadow: focus
-              ? '0 0 0 4px var(--accent-bg), 0 12px 34px -12px rgba(0,0,0,0.28)'
-              : '0 2px 12px -4px rgba(0,0,0,0.14)',
-            transition: 'border-color .18s ease, box-shadow .18s ease, transform .18s ease',
-            transform: focus ? 'translateY(-1px)' : 'none',
+              ? '0 0 0 3px var(--accent-bg), var(--elev-2)'
+              : 'var(--elev-1)',
+            transition: 'border-color .18s ease, box-shadow .2s ease',
           }}
         >
           <textarea
@@ -2406,8 +2464,15 @@ function Composer({
             onChange={(e) => onChange(e.target.value)}
             onFocus={() => setFocus(true)}
             onBlur={() => setFocus(false)}
+            // Past the cap, lines scrolled above the top soften into the box
+            // rather than being sliced at its edge.
+            onScroll={(e) =>
+              e.currentTarget.classList.toggle('is-scrolled', e.currentTarget.scrollTop > 0)
+            }
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
+              // Not while an input method is composing: there Enter commits
+              // the word being built, and sending half of it is data loss.
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault()
                 if (canSend) onSubmit()
               }
@@ -2419,17 +2484,21 @@ function Composer({
             placeholder={deep ? 'Ask why something changed…' : 'Ask anything about your data…'}
             aria-label="Ask about your data"
             style={{
-              flex: 1,
+              // In the stacked layout this must not be `flex: 1`: a flex-basis
+              // on the column's main axis overrides the height `grow` sets, and
+              // the box stayed one line tall however much was typed into it.
+              flex: tools ? 'none' : 1,
+              width: tools ? '100%' : undefined,
               resize: 'none',
-              maxHeight: 160,
               background: 'transparent',
               border: 'none',
               outline: 'none',
               color: 'var(--text)',
-              fontSize: 14.5,
-              lineHeight: 1.6,
+              fontSize: 15,
+              lineHeight: 1.55,
               // Inset so the text starts where the controls' labels do.
-              padding: tools ? '2px 6px' : '5px 0',
+              padding: tools ? '0 6px' : '5px 0',
+              cursor: 'text',
             }}
           />
           {tools ? (

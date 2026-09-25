@@ -397,6 +397,13 @@ code, pre, .mono {
    transparent background. */
 .rm-menu-item:hover { background: var(--panel-hover) !important; }
 
+/* A composer grown past its cap scrolls inside; the lines above the top fade
+   out over the first few pixels instead of being cut at the edge. */
+.rm-composer textarea.is-scrolled {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
 /* The composer's tool row — the answer mode and *Ask within…*, inside the box
    under the text, with the send disc at its end. One family: every control is
    30px tall, 12.5px, a pill, so the row reads as one line of settings rather
