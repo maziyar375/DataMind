@@ -480,6 +480,15 @@ export const Icon = {
       <path d="M13 2L4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z" />
     </svg>
   ),
+  // Deep analysis: a staircase — one step, then the next, going further in.
+  // Beside `Zap` in the composer, the pair reads as "at once" and "step by
+  // step", which is the whole difference between the two modes.
+  Steps: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M3 5h5v5h5v5h5v4" />
+      <path d="M18 19h3" />
+    </svg>
+  ),
   // The theme switch says which theme it *gives* you, so it is drawn as the
   // two things you can pick rather than as an abstract on/off track.
   Sun: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (

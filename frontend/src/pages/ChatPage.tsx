@@ -206,8 +206,10 @@ export default function ChatPage() {
   // found and how much budget is gone, folded from the four deep events.
   // Null on every quick run, which is what keeps the plan panel off them.
   const [liveDeep, setLiveDeep] = useState<DeepView | null>(null)
-  // *Quick* or *Deep — a few minutes*, for the next question only. Back to
-  // Quick after each send: a mode that costs minutes is chosen, never left on.
+  // *Quick* or *Deep — a few minutes*, chosen **per conversation**: it stays
+  // as set for every question in this thread until it is changed. Opening a
+  // thread restores the depth its last question was asked at (read from that
+  // run, so it survives a reload); a new thread starts Quick.
   const [depth, setDepth] = useState<'QUICK' | 'DEEP'>('QUICK')
   // Offered where the installation has the mode **and** this person may use
   // it: `deep.run` is an operator's decision (Phase 8), and a toggle that
@@ -331,6 +333,8 @@ export default function ChatPage() {
   const loadMessages = useCallback(async (conversationId: string) => {
     const loaded = await conversations.messages(conversationId)
     setMessages(loaded)
+    const lastDepth = [...loaded].reverse().find((m) => m.run?.depth)?.run?.depth
+    setDepth(lastDepth === 'DEEP' ? 'DEEP' : 'QUICK')
 
     // If the newest run is still in flight, reattach to its stream instead of
     // showing a conversation that looks frozen.
@@ -398,6 +402,7 @@ export default function ChatPage() {
 
     if (!activeId) {
       setMessages([])
+      setDepth('QUICK')
       dropSuggestions()
       return
     }
@@ -742,7 +747,6 @@ export default function ChatPage() {
         scope: scope ?? undefined,
         depth: deepAvailable ? depth : undefined,
       })
-      setDepth('QUICK')
       attachStream(accepted.run_id, conversationId)
       // After the attach, which clears the live view: the panel should say
       // "Planning…" from the first frame, not wait for the plan to arrive.
@@ -2268,7 +2272,7 @@ function Composer({
   /** The chosen section, `WHOLE_DATABASE`, or null for "let it choose". */
   scope: string | null
   onScope: (scope: string | null) => void
-  /** The next question's depth, or null where deep analysis is not enabled —
+  /** This conversation's depth, or null where deep analysis is not enabled —
    * which is no toggle at all rather than a disabled one. */
   depth: 'QUICK' | 'DEEP' | null
   onDepth: (depth: 'QUICK' | 'DEEP') => void
@@ -2292,71 +2296,11 @@ function Composer({
   // half the time is a second thing to look at every time it is not.
   const canStop = busy && !stopping
 
-  return (
-    <div style={{ padding: '10px 28px 20px', flexShrink: 0 }}>
-      <div
-        className={`rm-composer${active ? ' is-active' : ''}${busy ? ' is-busy' : ''}`}
-        style={{ maxWidth: 780, margin: '0 auto' }}
-      >
-        {/* Above the box rather than in the hint line below it: that line
-            fades in only once the composer is engaged and is click-through
-            until then, which is right for a keyboard tip and wrong for a
-            control somebody has to find. */}
-        {(sections.length > 0 || depth !== null) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 7, paddingLeft: 6 }}>
-            {sections.length > 0 && (
-              <ScopePicker value={scope} onChange={onScope} options={sections} />
-            )}
-            {depth !== null && (
-              <DepthToggle value={depth} onChange={onDepth} disabled={busy} />
-            )}
-          </div>
-        )}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'flex-end',
-            gap: 10,
-            background: 'var(--panel)',
-            border: `1px solid ${focus ? 'var(--accent)' : 'var(--border-strong)'}`,
-            borderRadius: 22,
-            padding: '10px 10px 10px 18px',
-            boxShadow: focus
-              ? '0 0 0 4px var(--accent-bg), 0 12px 34px -12px rgba(0,0,0,0.28)'
-              : '0 2px 12px -4px rgba(0,0,0,0.14)',
-            transition: 'border-color .18s ease, box-shadow .18s ease, transform .18s ease',
-            transform: focus ? 'translateY(-1px)' : 'none',
-          }}
-        >
-          <textarea
-            ref={ref}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onFocus={() => setFocus(true)}
-            onBlur={() => setFocus(false)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                if (canSend) onSubmit()
-              }
-            }}
-            rows={1}
-            dir={dirOf(value)}
-            placeholder="Ask anything about your data…"
-            aria-label="Ask about your data"
-            style={{
-              flex: 1,
-              resize: 'none',
-              maxHeight: 160,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              color: 'var(--text)',
-              fontSize: 14.5,
-              lineHeight: 1.6,
-              padding: '5px 0',
-            }}
-          />
+  const tools = sections.length > 0 || depth !== null
+  const deep = depth === 'DEEP'
+
+  const sendButton = (
+    <>
           {/*
             One slot, two controls, one disc — the arrow becomes a square while
             a run is in flight, which is the convention every chat product has
@@ -2413,6 +2357,100 @@ function Composer({
               <Icon.Send size={16} />
             )}
           </button>
+    </>
+  )
+
+  return (
+    <div style={{ padding: '10px 28px 20px', flexShrink: 0 }}>
+      <div
+        className={`rm-composer${active ? ' is-active' : ''}${busy ? ' is-busy' : ''}`}
+        style={{ maxWidth: 780, margin: '0 auto' }}
+      >
+        {/*
+          The per-question controls live *inside* the box, on a row under the
+          text — beside the message they configure and the button that sends
+          it, which is where every chat product people arrive knowing puts
+          them. They used to float above the box as two pills of different
+          sizes and type, reading as page furniture rather than as settings
+          for this question, and on a phone the pair ran off the screen.
+
+          Not behind an "Advanced" fold, deliberately: both change the answer.
+          Depth turns seconds into minutes, and a chosen section narrows what
+          the model may read — a setting that changes the answer has to be
+          visible while it is in force.
+        */}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: tools ? 'column' : 'row',
+            alignItems: tools ? 'stretch' : 'flex-end',
+            gap: tools ? 8 : 10,
+            background: 'var(--panel)',
+            // Deep keeps an accent edge at rest, so a thread left in the
+            // minutes-long mode says so before anything is typed into it.
+            border: `1px solid ${
+              focus ? 'var(--accent)' : deep ? 'var(--accent-border)' : 'var(--border-strong)'
+            }`,
+            borderRadius: tools ? 20 : 22,
+            padding: tools ? '12px 10px 10px 12px' : '10px 10px 10px 18px',
+            boxShadow: focus
+              ? '0 0 0 4px var(--accent-bg), 0 12px 34px -12px rgba(0,0,0,0.28)'
+              : '0 2px 12px -4px rgba(0,0,0,0.14)',
+            transition: 'border-color .18s ease, box-shadow .18s ease, transform .18s ease',
+            transform: focus ? 'translateY(-1px)' : 'none',
+          }}
+        >
+          <textarea
+            ref={ref}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onFocus={() => setFocus(true)}
+            onBlur={() => setFocus(false)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                if (canSend) onSubmit()
+              }
+            }}
+            rows={1}
+            dir={dirOf(value)}
+            // In Deep the prompt says what the mode is *for*: a why-question
+            // is where a plan of several queries earns its minutes.
+            placeholder={deep ? 'Ask why something changed…' : 'Ask anything about your data…'}
+            aria-label="Ask about your data"
+            style={{
+              flex: 1,
+              resize: 'none',
+              maxHeight: 160,
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              color: 'var(--text)',
+              fontSize: 14.5,
+              lineHeight: 1.6,
+              // Inset so the text starts where the controls' labels do.
+              padding: tools ? '2px 6px' : '5px 0',
+            }}
+          />
+          {tools ? (
+            <div className="rm-composer-tools">
+              {/* The controls wrap as a group and the disc never moves: on a
+                  phone the section chip drops under the mode rather than
+                  being squeezed to an icon beside the send button. */}
+              <div className="rm-composer-controls">
+                {depth !== null && (
+                  <DepthToggle value={depth} onChange={onDepth} disabled={busy} />
+                )}
+                {sections.length > 0 && (
+                  <ScopePicker value={scope} onChange={onScope} options={sections} />
+                )}
+                {deep && <span className="rm-composer-eta">Takes a few minutes</span>}
+              </div>
+              {sendButton}
+            </div>
+          ) : (
+            sendButton
+          )}
         </div>
 
         <div
@@ -2481,12 +2519,17 @@ function Composer({
 const WHOLE_DATABASE = 'NONE'
 
 /**
- * *Quick* / *Deep — a few minutes*, beside *Ask within…*.
+ * *Quick* / *Deep* — the conversation's answer mode, first in the composer's
+ * tool row.
  *
- * The second option names its latency in the control itself — the cheapest
- * honesty available, and what stops a multi-minute analysis being felt as a
- * hang (plan §4.1). A segmented pair rather than a switch: both states are
- * choices with names, and "off" is not one of them.
+ * A segmented pair rather than a switch: both states are choices with names,
+ * and "off" is not one of them. The latency the plan wants named in the
+ * control (§4.1) is said three times without making the control long — the
+ * Deep segment's tooltip, a "Takes a few minutes" beside the row while it is
+ * chosen, and the box's accent edge — which is what stops a multi-minute
+ * analysis being felt as a hang.
+ *
+ * A real radio group for the keyboard: one tab stop, arrows move the choice.
  */
 function DepthToggle({
   value, onChange, disabled,
@@ -2495,43 +2538,65 @@ function DepthToggle({
   onChange: (value: 'QUICK' | 'DEEP') => void
   disabled?: boolean
 }) {
-  const options: Array<{ value: 'QUICK' | 'DEEP'; label: string; title: string }> = [
-    { value: 'QUICK', label: 'Quick', title: 'One query, an answer in seconds' },
+  const options: Array<{
+    value: 'QUICK' | 'DEEP'; label: string; title: string; icon: React.ReactNode
+  }> = [
+    {
+      value: 'QUICK',
+      label: 'Quick',
+      title: 'Quick — one query, an answer in seconds',
+      icon: <Icon.Zap size={13} />,
+    },
     {
       value: 'DEEP',
-      label: 'Deep — a few minutes',
-      title: 'A planned analysis over several queries. You can watch it and ask for the answer early.',
+      label: 'Deep',
+      title: 'Deep analysis — plans several queries and takes a few minutes. You can watch it work and ask for the answer early.',
+      icon: <Icon.Steps size={13} />,
     },
   ]
+  const buttons = useRef<Array<HTMLButtonElement | null>>([])
+
+  function step(from: number, delta: number) {
+    const next = (from + delta + options.length) % options.length
+    onChange(options[next].value)
+    buttons.current[next]?.focus()
+  }
+
   return (
     <div
       role="radiogroup"
-      aria-label="Answer depth"
-      style={{
-        display: 'inline-flex', padding: 2, gap: 2, borderRadius: 999,
-        border: '1px solid var(--border)', background: 'var(--panel)',
-        opacity: disabled ? 0.6 : 1,
-      }}
+      aria-label="Answer mode"
+      aria-disabled={disabled || undefined}
+      className="rm-seg"
     >
-      {options.map((option) => {
+      {options.map((option, i) => {
         const on = option.value === value
         return (
           <button
             key={option.value}
+            ref={(el) => {
+              buttons.current[i] = el
+            }}
             type="button"
             role="radio"
             aria-checked={on}
+            tabIndex={on ? 0 : -1}
             title={option.title}
             disabled={disabled}
+            className={`rm-seg-opt${on ? ' is-on' : ''}${option.value === 'DEEP' ? ' is-deep' : ''}`}
             onClick={() => onChange(option.value)}
-            style={{
-              border: 'none', borderRadius: 999, padding: '3px 10px',
-              fontSize: 12, fontWeight: on ? 600 : 500, cursor: disabled ? 'default' : 'pointer',
-              background: on ? 'var(--accent-bg)' : 'transparent',
-              color: on ? 'var(--accent)' : 'var(--text-dim)',
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                e.preventDefault()
+                step(i, 1)
+              } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                e.preventDefault()
+                step(i, -1)
+              }
             }}
           >
-            {option.label}
+            {option.icon}
+            <span>{option.label}</span>
           </button>
         )
       })}
@@ -2577,40 +2642,45 @@ function ScopePicker({
   ]
   const current = rows.find((r) => r.value === value) ?? rows[0]
 
+  // What the chip says is the choice itself, not the control's name: "Any
+  // section" when nothing narrows the question, "Within Orders" when a
+  // section does, "Whole database" when the reader widened it on purpose.
+  // Anything but the default is an override in force, so it is drawn tinted.
+  const isSet = value !== null
+  const label =
+    value === null ? 'Any section'
+    : value === WHOLE_DATABASE ? 'Whole database'
+    : current.label
+
   return (
-    <span ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', minWidth: 0 }}>
       <button
         type="button"
-        className="rm-scope-btn"
+        className={`rm-tool-btn${isSet ? ' is-set' : ''}`}
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-label={`Ask within: ${current.label}`}
         title={`Ask within: ${current.label}`}
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 5,
-          maxWidth: 260,
-          padding: '2px 7px',
-          borderRadius: 999,
-          border: `1px solid ${open ? 'var(--accent)' : 'var(--border)'}`,
-          background: 'transparent',
-          font: 'inherit',
-          // `--text-dim`, not `--text-faint`: at 11px the faint grey measured
-          // 4.0:1 here, under the floor, and this is a control rather than a
-          // decoration. Quiet is carried by the size and the hairline border.
-          color: 'var(--text-dim)',
-          cursor: 'pointer',
-        }}
       >
-        <Icon.Grid size={11} />
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          Ask within:{' '}
-          <span style={{ color: value === null ? 'inherit' : 'var(--text-strong)', fontWeight: 600 }}>
-            {current.label}
-          </span>
+        <Icon.Grid size={13} />
+        <span className="rm-tool-label">
+          {value !== null && value !== WHOLE_DATABASE && (
+            <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}>Within </span>
+          )}
+          <span dir={dirOf(label)}>{label}</span>
         </span>
-        <Icon.Chevron open={open} size={11} stroke="currentColor" />
+        {/* The menu opens upward, so the chevron points up until it does. */}
+        <span
+          aria-hidden
+          style={{
+            display: 'inline-flex',
+            transform: open ? 'rotate(90deg)' : 'rotate(-90deg)',
+            transition: 'transform .16s cubic-bezier(.2,.8,.2,1)',
+          }}
+        >
+          <Icon.Chevron size={12} stroke="currentColor" />
+        </span>
       </button>
 
       {open && (
@@ -2619,9 +2689,11 @@ function ScopePicker({
           aria-label="Ask within"
           style={{
             position: 'absolute',
-            bottom: 'calc(100% + 6px)',
-            left: '50%',
-            transform: 'translateX(-50%)',
+            // Up from the chip and flush with its left edge: the row sits at
+            // the bottom of the box, and a menu centred on a chip near the
+            // box's edge would hang off it on a phone.
+            bottom: 'calc(100% + 10px)',
+            left: 0,
             minWidth: 230,
             maxWidth: 300,
             maxHeight: 300,
@@ -2635,6 +2707,17 @@ function ScopePicker({
             textAlign: 'left',
           }}
         >
+          <div
+            aria-hidden
+            style={{
+              padding: '6px 9px 5px',
+              fontSize: 11.5,
+              fontWeight: 600,
+              color: 'var(--text-dim)',
+            }}
+          >
+            Ask within
+          </div>
           {rows.map((row) => {
             const chosen = row.value === current.value
             return (
@@ -2687,7 +2770,7 @@ function ScopePicker({
                     {row.label}
                   </span>
                   {row.hint && (
-                    <span style={{ display: 'block', fontSize: 11, color: 'var(--text-faint)' }}>
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--text-dim)' }}>
                       {row.hint}
                     </span>
                   )}

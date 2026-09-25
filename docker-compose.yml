@@ -123,6 +123,9 @@ services:
       # the 120s default and fails questions that were about to succeed.
       RUN_DEADLINE_SECONDS: "${RUN_DEADLINE_SECONDS:-300}"
       LLM_REQUEST_TIMEOUT_SECONDS: "${LLM_REQUEST_TIMEOUT_SECONDS:-120}"
+      # Deep analysis (docs/reference/pipeline-deep.md). Off unless `.env`
+      # turns it on — its accuracy gate has not opened.
+      DEEP_ENABLED: "${DEEP_ENABLED:-false}"
     ports: ["8000:8000"]
     command: >
       sh -c "alembic upgrade head &&

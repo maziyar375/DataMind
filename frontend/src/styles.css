@@ -397,10 +397,125 @@ code, pre, .mono {
    transparent background. */
 .rm-menu-item:hover { background: var(--panel-hover) !important; }
 
-/* *Ask within…* under the composer. Quiet until it is reached for — it is a
-   correction, offered beside a hint line, not a setting the eye has to clear
-   on the way to the question. */
-.rm-scope-btn:hover { border-color: var(--border-strong) !important; color: var(--text) !important; }
+/* The composer's tool row — the answer mode and *Ask within…*, inside the box
+   under the text, with the send disc at its end. One family: every control is
+   30px tall, 12.5px, a pill, so the row reads as one line of settings rather
+   than as two widgets that happened to land next to each other. */
+.rm-composer-tools {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.rm-composer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  flex: 1;
+  min-width: 0;
+  /* Centred on the 38px disc beside it while the row is one line. */
+  padding-bottom: 4px;
+}
+
+/* Quick / Deep. A track with a raised thumb; Deep's thumb is accent-tinted,
+   because it is the mode that costs minutes and should look chosen. */
+.rm-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.rm-seg[aria-disabled='true'] { opacity: 0.55; }
+.rm-seg-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 11px 0 9px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.rm-seg-opt:hover:not(.is-on):not(:disabled) { color: var(--text); background: var(--panel-hover); }
+.rm-seg-opt.is-on {
+  background: var(--panel);
+  color: var(--text-strong);
+  box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-1);
+}
+.rm-seg-opt.is-on.is-deep {
+  background: var(--accent-bg);
+  /* The accent alone measured 4.18:1 on its own tint in dark. Pulled toward
+     the strongest text it clears the floor in both themes — lighter on the
+     dark panel, darker on paper — and still reads as the accent. */
+  color: color-mix(in oklch, var(--accent) 70%, var(--text-strong));
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.rm-seg-opt:disabled { cursor: default; }
+.rm-seg-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* *Ask within…* — a chip that says the choice, not its own name. Anything but
+   "Any section" is an override in force, and is drawn tinted. */
+.rm-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  min-width: 0;
+  max-width: 260px;
+  padding: 0 9px 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.rm-tool-btn:hover { color: var(--text); background: var(--panel-hover); border-color: var(--border-strong); }
+.rm-tool-btn[aria-expanded='true'] { color: var(--text); border-color: var(--accent); }
+.rm-tool-btn.is-set { color: var(--text-strong); background: var(--accent-bg); border-color: var(--accent-border); }
+.rm-tool-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rm-tool-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* While Deep is chosen, the row says what it costs in time. */
+.rm-composer-eta {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* A phone keeps the whole row on one line: the time note goes (the Deep
+   segment's accent and the box's edge still say which mode this is), and the
+   section chip gives up width before anything else does. */
+@media (max-width: 560px) {
+  .rm-composer-eta { display: none; }
+  .rm-tool-btn { max-width: 100%; }
+}
 
 /* A finished answer stays quiet until you reach for it. Kept visible for
    keyboard users, who never generate a hover. */
