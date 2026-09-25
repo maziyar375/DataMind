@@ -35,7 +35,7 @@ plugins.
 |---|---|---|
 | `src/api/client.ts` | `mock/client.ts` | every request the SPA makes goes through this one module |
 | `react-router-dom` | `shims/react-router-dom.ts` | `createHashRouter` for `createBrowserRouter`: Pages has no SPA fallback, so a deep link has to live after `#` |
-| `src/pages/LoginPage.tsx` | `shims/LoginPage.tsx` | the real page, with the demo credentials typed in |
+| `src/pages/LoginPage.tsx` | `shims/LoginPage.tsx` | the real page, with the demo credentials typed in. The demo opens here; signing in is remembered for the tab, so a reload stays in and a new visit starts at the door |
 
 The client is the narrowest seam that catches every call: nothing else in
 `src/` touches `fetch`, `EventSource` or `XMLHttpRequest`. Replacing it rather
@@ -65,7 +65,14 @@ head script that prefixes the base path onto `<img>` sources naming a file in
 - `mock/stream.ts` turns a recorded answer into the event stream the pipeline
   emits: `STEP_STARTED`/`STEP_FINISHED` with the nodes' own detail sentences,
   `SQL_GENERATED`/`SQL_REJECTED`/`SQL_VALIDATED`, `RESULT_PREVIEW`,
-  `TEXT_DELTA`, `RUN_FINISHED`. It plays them on a schedule. A timeline is a
+  `TEXT_DELTA`, `RUN_FINISHED`. It plays them on a schedule. A deep analysis
+  (`scriptDeep`) is played the way the deep graph runs one — `route`, `plan`,
+  then per step `step` → the chat road → `compute`, then `synthesize` and
+  `chart` — with `PLAN_PROPOSED`, `PLAN_REVISED`, `STEP_EVIDENCE` and
+  `BUDGET_SPENT` where those nodes emit them. *Answer now* is honoured: the step
+  in flight finishes, no other starts, and the answer is the one recorded for
+  that many steps, under the product's own "built from 3 of 5 planned steps"
+  sentence. A timeline is a
   pure function of the answer and `mock/timing.ts`, so the live trail and the
   persisted one agree.
 - `mock/store.ts` holds the session's conversations and runs in
@@ -136,6 +143,11 @@ browser console.
 
 ## The scripted questions
 
+The composer offers **Quick** and **Deep**. Each mode answers what it was
+recorded with: a question recorded only in the other mode gets a short reply
+saying which mode to switch to, rather than the other mode's answer under the
+wrong label.
+
 | Connection | Question | Shows |
 |---|---|---|
 | Sales warehouse | How has monthly revenue trended over the last 12 months? | A time series: narrative, table and a line chart that agree |
@@ -150,6 +162,21 @@ questions behind the four conversations already in the sidebar. After each
 answer, the follow-up chips offer the next scripted questions. Anything else
 gets the demo's own reply: no steps, no badge, a list of what it can answer,
 and the chips.
+
+### The deep analysis
+
+| Connection | Question | Shows |
+|---|---|---|
+| Sales warehouse | Why was June revenue so much higher than the months around it? | A five-step plan (a query, *What drove it*, *What stands out*, two more queries), two steps sharpened once the steps they depend on have answered, and an answer whose every sentence cites its step. It traces June's jump to one order: Meridian Health Systems' $246,517 on 16 June |
+
+It is recorded like everything else, by `run_deep` in `scripts/build.py`: each
+step's statement goes through the real guard and connector and is closed by the
+deep pipeline's own `evidence.close_step`, so the plan panel shows the backend's
+own computed summaries. The answer is written for **every prefix** of the plan,
+because *Answer now* can stop it after any step, and each version is checked by
+`reports.checks.check_claims` against the steps it cites: the build fails on a
+sentence without a citation or a figure its step does not hold. A finished run
+of it is already in the sidebar.
 
 Sales runs under **SAMPLE** (the model saw the rows, so the prose quotes
 them). Sakila runs under **AGGREGATE**, so the header's badge differs between
@@ -171,15 +198,18 @@ the two, and so does what an answer is allowed to say.
 
 ## What the demo does and does not show
 
-It shows what is built, and nothing that is not. Three things are shown in
-their honest off or empty state, rather than dressed up:
+It shows what is built, and nothing that is not. Where it departs from a
+default installation, or leaves something empty, it says so rather than
+dressing it up:
 
 - **The semantic layer is not part of the demo.** Its tab is hidden the way
   the product hides it from a reader without a grant on the layer
   (`SHOW_SEMANTIC_TAB` in `mock/client.ts`). Every answer says *Generated
   against the bare schema*, which is true.
-- **Deep analysis is built and shipped off** (`docs/status.md` §3), so the
-  installation does not offer it.
+- **Deep analysis is on here and shipped off in the product**
+  (`docs/status.md` §3). The demo turns the installation switch on so the
+  composer offers it; what it plays is a recorded run, not a claim that the
+  mode ships.
 - **The knowledge store is empty.** The `match` step reports *No template
   matched*, and nothing is answered from a saved question.
 

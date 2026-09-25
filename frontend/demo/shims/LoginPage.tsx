@@ -1,9 +1,9 @@
 /**
  * The real sign-in screen, arriving filled in.
  *
- * The demo opens signed in, so this screen is only reached by signing out or
- * by opening `#/login`. When it is, the demo's credentials are already in the
- * two fields — one click, and any other input works as well. The page itself
+ * The demo opens here, as the product does for anyone not signed in, with
+ * the demo's credentials already in the two fields — one click, and any other
+ * input works as well. The page itself
  * is untouched: this wraps it and types into its inputs the way a person or a
  * password manager would, through the native value setter and an `input`
  * event, which is what React's `onChange` listens for.

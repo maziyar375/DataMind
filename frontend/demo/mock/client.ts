@@ -30,15 +30,16 @@ import { AUDIT, recordOperation, usageByPerson, usageMine, usageTotal } from './
 import { CATALOG } from './fixtures/catalog.generated'
 import { SECTIONS, SNAPSHOTS, SNAPSHOT_VERSION } from './fixtures/schema.generated'
 import {
-  CONNECTION_KEY, CONNECTIONS, DEMO_PERSON, IDS, LLM_CONFIGS, PEOPLE_BY_ID, ROLES, SERVICE_ACCOUNTS,
+  CONNECTION_KEY, CONNECTIONS, DEEP_LIMITS, DEMO_PERSON, IDS, LLM_CONFIGS, PEOPLE_BY_ID, ROLES, SERVICE_ACCOUNTS,
   SERVICE_KEYS, TEAMS, USERS, rolesForUser, teamMembers, teamsForUser, userOf,
 } from './fixtures/world'
 import {
-  ANSWERS_BY_ID, answerOf, askedIn, conversationOf, detailOf, lastRunIn, messagesOf, newId, runOf,
-  save, state, summaryOf, timelineOf, titleOf, type StoredRun,
+  ANSWERS_BY_ID, answerOf, askedIn, chartedOf, conversationOf, deepOf, detailOf, lastRunIn,
+  lastSqlOf, messagesOf, newId, runOf, save, state, stateOf, summaryOf, timelineOf, titleOf, type StoredRun,
 } from './store'
 import { ANSWERS } from './fixtures/answers.generated'
-import { play } from './stream'
+import { DEEP } from './fixtures/deep.generated'
+import { play, type DeepTimeline } from './stream'
 import { REQUEST_MS, SUGGESTIONS_MS } from './timing'
 
 export { ApiError, getAccessToken, isReportRunInFlight, isRunInFlight, onAuthChange, setAccessToken }
@@ -96,27 +97,50 @@ function connectionOr404(id: string): Connection {
 
 // ── auth ─────────────────────────────────────────────────────────────────────
 /**
- * The demo opens signed in. `#/login` is the one address that does not, so the
- * sign-in screen can be seen — pre-filled, one click from the app.
+ * The demo opens on the sign-in screen, pre-filled, one click from the app.
+ * Signing in is remembered for the tab, the way the real refresh cookie is
+ * remembered for the browser: a reload on a deep link comes back signed in,
+ * and a new visit starts at the door. `#/login` always shows the screen.
  */
+const SIGNED_IN_KEY = 'datamind-demo:signed-in'
+
 function wantsLoginScreen(): boolean {
   return typeof location !== 'undefined' && location.hash.replace(/^#/, '').startsWith('/login')
+}
+
+function signedInThisTab(): boolean {
+  try {
+    return sessionStorage.getItem(SIGNED_IN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function rememberSignedIn(on: boolean): void {
+  try {
+    if (on) sessionStorage.setItem(SIGNED_IN_KEY, '1')
+    else sessionStorage.removeItem(SIGNED_IN_KEY)
+  } catch {
+    /* blocked storage: the next reload simply starts at the door */
+  }
 }
 
 export const auth: typeof Real.auth = {
   async login() {
     setAccessToken('demo')
+    rememberSignedIn(true)
     // Off the login address, so the router lands on the app rather than on a
     // route the signed-in shell does not have.
     if (wantsLoginScreen()) history.replaceState(null, '', `${location.pathname}#/chat`)
     return respond(currentUser, 450)
   },
   async restore() {
-    if (wantsLoginScreen()) return respond(null, 250)
+    if (wantsLoginScreen() || !signedInThisTab()) return respond(null, 250)
     setAccessToken('demo')
     return respond(currentUser, 250)
   },
   async logout() {
+    rememberSignedIn(false)
     setAccessToken(null)
   },
   me: () => respond(currentUser),
@@ -256,7 +280,7 @@ const GRANTS: Record<string, Grant[]> = {
     { id: 'g-3', principal_id: IDS.users.tomas, principal_name: 'Tomás Álvarez', principal_kind: 'HUMAN', privilege: 'modify', path: 'direct' },
   ],
   [`connection:${IDS.connections.sakila}`]: [
-    { id: 'g-4', principal_id: IDS.users.sam, principal_name: 'Sam Rivera', principal_kind: 'HUMAN', privilege: 'manage', path: 'direct' },
+    { id: 'g-4', principal_id: IDS.users.mazbar, principal_name: 'Mazbar Azami', principal_kind: 'HUMAN', privilege: 'manage', path: 'direct' },
     { id: 'g-5', principal_id: IDS.teams.analytics, principal_name: 'Analytics', principal_kind: 'TEAM', privilege: 'select', path: 'direct' },
   ],
   [`llm_config:${IDS.llm.sonnet}`]: [
@@ -264,7 +288,7 @@ const GRANTS: Record<string, Grant[]> = {
     { id: 'g-7', principal_id: IDS.teams.finance, principal_name: 'Finance', principal_kind: 'TEAM', privilege: 'select', path: 'direct' },
   ],
   [`llm_config:${IDS.llm.gpt}`]: [
-    { id: 'g-8', principal_id: IDS.users.sam, principal_name: 'Sam Rivera', principal_kind: 'HUMAN', privilege: 'select', path: 'direct' },
+    { id: 'g-8', principal_id: IDS.users.mazbar, principal_name: 'Mazbar Azami', principal_kind: 'HUMAN', privilege: 'select', path: 'direct' },
   ],
 }
 
@@ -353,8 +377,8 @@ export const connections: typeof Real.connections = {
   list: () => respond(CONNECTIONS),
   setDisclosure: () => refuse('The disclosure policy cannot be changed here.'),
   deepBudget: () => respond({
-    effective: { max_steps: 5, max_queries: 8, max_rows_total: 20000, max_prompt_tokens: 200000, deadline_seconds: 300 },
-    ceiling: { max_steps: 5, max_queries: 8, max_rows_total: 20000, max_prompt_tokens: 200000, deadline_seconds: 300 },
+    effective: DEEP_LIMITS,
+    ceiling: DEEP_LIMITS,
     is_default: true,
     refused: null,
   }),
@@ -416,7 +440,6 @@ function reviewsFor(connectionId: string): Review[] {
     .filter((run) => run.connectionId === connectionId && run.feedback && run.feedback.verdict !== 'CORRECT')
     .map((run) => {
       const turn = conversationOf(run.conversationId)?.turns.find((t) => t.messageId === run.userMessageId)
-      const answer = answerOf(run)
       return {
         id: run.feedback!.id,
         run_id: run.id,
@@ -425,7 +448,7 @@ function reviewsFor(connectionId: string): Review[] {
         state: 'OPEN',
         created_at: run.feedback!.created_at,
         question: turn?.question ?? '',
-        sql: answer?.attempts.at(-1)?.raw_sql ?? '',
+        sql: lastSqlOf(run),
         flagged_by: displayName,
       }
     })
@@ -514,6 +537,17 @@ function findAnswer(content: string, connectionKey: 'sales' | 'sakila') {
   }
 }
 
+function findDeep(content: string, connectionKey: 'sales' | 'sakila') {
+  const wanted = normalise(content)
+  return DEEP.find((d) => d.connection === connectionKey
+    && [d.question, ...d.aliases].some((q) => normalise(q) === wanted)) ?? null
+}
+
+/** The deep analyses recorded on one connection, as a list. */
+function deepList(key: 'sales' | 'sakila'): string {
+  return DEEP.filter((d) => d.connection === key).map((d) => `• ${d.question}`).join('\n')
+}
+
 const CONNECTION_NAME: Record<'sales' | 'sakila', string> = { sales: 'Sales warehouse', sakila: 'Sakila DVD rental' }
 
 /** The demo's own answer to a question it has no recording of. */
@@ -529,6 +563,32 @@ function fallbackText(key: 'sales' | 'sakila', elsewhere: boolean): string {
     + `On **${CONNECTION_NAME[key]}** you can ask:\n${list}\n\n`
     + 'The four starters on a new chat work too, and so does '
     + `**${CONNECTION_NAME[other]}** with its own questions. The suggestions below ask one for you.`
+}
+
+/**
+ * The demo's own answer in **Deep**, to a question with no recorded analysis.
+ * A deep run is a plan of several real queries, so only the questions it was
+ * recorded with can be shown; the rest are one switch away, in Quick.
+ */
+function deepFallbackText(key: 'sales' | 'sakila', quick: boolean): string {
+  const recorded = deepList(key)
+  const where = recorded
+    ? `On **${CONNECTION_NAME[key]}** a deep analysis is recorded for:\n${recorded}`
+    : `No deep analysis is recorded on **${CONNECTION_NAME[key]}**. Start a new chat on `
+      + `**${CONNECTION_NAME[key === 'sales' ? 'sakila' : 'sales']}** to watch one:\n`
+      + deepList(key === 'sales' ? 'sakila' : 'sales')
+  const lead = quick
+    ? '**Demo mode** — that question is recorded as a quick answer. Switch the composer to **Quick** to see it.'
+    : '**Demo mode** — this demo has no model or live database behind it, so a deep analysis can only be '
+      + 'shown for the questions it was recorded with, and that is not one of them.'
+  return `${lead}\n\n${where}\n\nEverything else this demo can answer is in **Quick**.`
+}
+
+/** The demo's own answer in **Quick**, to a question recorded only as a deep analysis. */
+function quickFallbackText(): string {
+  return '**Demo mode** — that is a *why* question, and it is recorded as a deep analysis: a plan of '
+    + 'several queries, each checked and computed, and an answer that cites the step behind every sentence. '
+    + 'Switch the composer to **Deep** and ask it again to watch it work.'
 }
 
 export const conversations: typeof Real.conversations = {
@@ -573,7 +633,16 @@ export const conversations: typeof Real.conversations = {
     if (!conversation) throw notFound('Conversation')
     const connectionId = payload.connection_id ?? conversation.connectionId
     const key = CONNECTION_KEY[connectionId] ?? 'sales'
+    const depth = payload.depth === 'DEEP' ? 'DEEP' : 'QUICK'
     const { here, elsewhere } = findAnswer(payload.content, key)
+    const deep = findDeep(payload.content, key)
+    // Each mode answers only what it was recorded with; the other mode's
+    // recording is named rather than played under the wrong label.
+    const answer = depth === 'QUICK' ? here : null
+    const analysis = depth === 'DEEP' ? deep : null
+    const fallback = answer || analysis ? null
+      : depth === 'DEEP' ? deepFallbackText(key, Boolean(here))
+        : deep ? quickFallbackText() : fallbackText(key, Boolean(elsewhere))
     const now = demoNow()
     const turn = { messageId: newId(), question: payload.content, askedAt: now, runIds: [] as string[] }
     const run: StoredRun = {
@@ -581,8 +650,11 @@ export const conversations: typeof Real.conversations = {
       conversationId: id,
       userMessageId: turn.messageId,
       assistantMessageId: newId(),
-      answerId: here?.id ?? null,
-      fallback: here ? null : fallbackText(key, Boolean(elsewhere)),
+      depth,
+      answerId: answer?.id ?? null,
+      deepId: analysis?.id ?? null,
+      answerNowAt: null,
+      fallback,
       connectionId,
       llmConfigId: payload.llm_config_id ?? conversation.llmConfigId,
       startedAt: now,
@@ -597,7 +669,7 @@ export const conversations: typeof Real.conversations = {
     state.runs.push(run)
     save()
     const timeline = timelineOf(run)
-    if (here && timeline.promptTokens !== null) {
+    if ((answer || analysis) && timeline.promptTokens !== null) {
       const model = LLM_CONFIGS.find((m) => m.id === run.llmConfigId) ?? LLM_CONFIGS[0]
       recordOperation({
         at: now, actorId: me(), actor: displayName, model: model.model,
@@ -612,6 +684,12 @@ export const conversations: typeof Real.conversations = {
     const key = CONNECTION_KEY[conversation.connectionId] ?? 'sales'
     const asked = askedIn(conversation)
     const last = lastRunIn(conversation)
+    // A thread in Deep is offered what Deep can answer: the other recorded
+    // analyses. A quick chip there would only be answered with a note.
+    if (last?.depth === 'DEEP') {
+      const deeper = DEEP.filter((d) => d.connection === key && !asked.has(d.id))
+      return { suggestions: deeper.slice(0, 4).map((d) => d.question) }
+    }
     const answer = last ? answerOf(last) : null
     const pool = answer ? [...answer.followups, ...SUGGESTED[key]] : SUGGESTED[key]
     const ids = [...new Set(pool)].filter((q) => !asked.has(q) && ANSWERS_BY_ID.get(q)?.connection === key)
@@ -698,14 +776,47 @@ export const runs: typeof Real.runs = {
     }
     return { cancelled: running }
   }),
-  answerNow: () => refuse('Deep analysis is built but switched off in this installation.'),
-  plan: () => Promise.reject(notFound('Plan')),
+  answerNow: (id) => respond(() => {
+    const run = runOr404(id)
+    // Honoured on the loop's next edge; a run that is not a deep one in
+    // flight has no edge left to honour it on, as the real 202 would find.
+    if (!deepOf(run) || stateOf(run) !== 'RUNNING' || run.answerNowAt !== null) return { requested: false }
+    run.answerNowAt = demoNow()
+    save()
+    return { requested: true }
+  }),
+  plan: (id) => respond(() => {
+    const run = runOr404(id)
+    const detail = detailOf(run)
+    const finished = detail.status !== 'RUNNING'
+    if (!deepOf(run)) return { depth: run.depth, status: detail.status, finished, restricted: false, plan: null }
+    const analysis = (timelineOf(run) as DeepTimeline).analysis
+    if (finished) return { depth: 'DEEP', status: detail.status, finished, restricted: false, ...analysis }
+    // In flight: what the events so far say, as `services/deep_plan.py` folds them.
+    const due = eventsDue(run)
+    const proposed = due.find((e) => e.type === 'PLAN_PROPOSED')?.data ?? null
+    const revisions = due.filter((e) => e.type === 'PLAN_REVISED').map((e) => e.data)
+    return {
+      depth: 'DEEP', status: detail.status, finished, restricted: false,
+      plan: proposed && {
+        restatement: proposed.restatement, stop_when: proposed.stop_when,
+        steps: (proposed.steps as unknown[]).map((step, i) => [...revisions].reverse().find((r) => r.index === i)?.by ?? step),
+      },
+      revisions,
+      steps: due.filter((e) => e.type === 'STEP_EVIDENCE').map((e) => e.data),
+      stop_reason: '',
+      claims: [],
+      traceable: null,
+      budget: [...due].reverse().find((e) => e.type === 'BUDGET_SPENT')?.data ?? null,
+    }
+  }),
   retry: (id) => respond(() => {
     const previous = runOr404(id)
     const conversation = conversationOf(previous.conversationId)!
     const turn = conversation.turns.find((t) => t.messageId === previous.userMessageId)!
     const run: StoredRun = {
-      ...previous, id: newId(), assistantMessageId: newId(), startedAt: demoNow(), cancelledAt: null, feedback: null,
+      ...previous, id: newId(), assistantMessageId: newId(), startedAt: demoNow(), cancelledAt: null,
+      answerNowAt: null, feedback: null,
     }
     turn.runIds.push(run.id)
     conversation.updatedAt = run.startedAt
@@ -746,14 +857,14 @@ export const runs: typeof Real.runs = {
   }),
   poll: (id, after) => respond(() => eventsDue(runOr404(id)).filter((e) => e.seq > after)),
   redrawChart: (id, chartType) => respond((): ChartRedraw => {
-    const answer = answerOf(runOr404(id))
-    if (!answer?.result) throw notFound('Result')
-    const drawn = answer.redraws[chartType]
+    const charted = chartedOf(runOr404(id))
+    if (!charted?.result) throw notFound('Result')
+    const drawn = charted.redraws[chartType]
     return {
       spec: drawn?.spec ?? null,
       chart_type: drawn?.chart_type ?? 'none',
       reason: drawn ? drawn.reason : 'This result cannot be drawn that way.',
-      options: answer.options,
+      options: charted.options,
     }
   }, 220),
 }

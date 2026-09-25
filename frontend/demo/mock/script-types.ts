@@ -1,5 +1,6 @@
 /**
- * The shape `scripts/build.py` writes into `fixtures/answers.generated.ts`.
+ * The shapes `scripts/build.py` writes into `fixtures/answers.generated.ts`
+ * and `fixtures/deep.generated.ts`.
  *
  * Everything that reaches the UI from here is typed against the real
  * `src/api/types` shapes, so a fixture that drifts from what the API serves is
@@ -8,6 +9,7 @@
 import type {
   ChartOption, GeneratedQuery, KpiSpec, TableArtifactSpec, TemplateCheckResult,
 } from '../../src/api/types'
+import type { DeepClaim, PlanView, Revision, StepFound } from '../../src/components/deep-plan'
 
 export type DemoConnectionKey = 'sales' | 'sakila'
 
@@ -19,7 +21,8 @@ export type DemoConnectionKey = 'sales' | 'sakila'
  */
 type Issue = NonNullable<GeneratedQuery['validation_report']['issues']>[number]
 export type WireReport = Omit<GeneratedQuery['validation_report'], 'issues'> & {
-  issues?: (Issue & Record<string, unknown>)[]
+  // `hint` is `str | None` on the wire: a warning with nothing to suggest sends null.
+  issues?: (Omit<Issue, 'hint'> & { hint?: string | null } & Record<string, unknown>)[]
 } & Record<string, unknown>
 
 export interface ScriptedAnswer {
@@ -66,4 +69,52 @@ export interface ScriptedAnswer {
    * literals the editor can tick — keyed by the sorted names, `''` for none.
    */
   template_check?: { sql: string; question: string; answers: Record<string, TemplateCheckResult> }
+}
+
+/** What the `chart` node makes of one result, and every *Change chart* answer. */
+export type ScriptedChart = Pick<ScriptedAnswer, 'chart' | 'kpi' | 'chart_step' | 'options' | 'redraws'>
+
+/**
+ * One step of a scripted deep analysis, as `run_deep` recorded it.
+ *
+ * `evidence` is `pipeline/evidence.step_payload` verbatim — the backend's own
+ * computed summary included — so the `STEP_EVIDENCE` event and the `ANALYSIS`
+ * artifact carry exactly what a real run would. The chart fields are what the
+ * `chart` node makes of this step's result if it is the last to run: the whole
+ * plan's last step, or the one in flight when *Answer now* was pressed.
+ */
+export interface ScriptedDeepStep extends ScriptedChart {
+  evidence: StepFound & { intent: string; tool: string; why: string }
+  attempt: ScriptedAnswer['attempts'][number]
+  result: NonNullable<ScriptedAnswer['result']>
+  inspect_step: { status: 'DONE' | 'SKIPPED'; detail: string }
+}
+
+/** The answer written from the first `steps` steps, checked by `check_claims`. */
+export interface ScriptedDeepAnswer {
+  steps: number
+  /** The writer's prose as it streamed, citation markers and all. */
+  streamed: string
+  /** The prose as stored: the markers lifted out into `claims`. */
+  answer: string
+  /** `check_claims`' own record: each sentence, the step it cites, its figures. */
+  claims: (DeepClaim & { figures: number[] })[]
+  traceable: number | null
+}
+
+/** What `scripts/build.py` writes into `fixtures/deep.generated.ts`. */
+export interface ScriptedDeep {
+  id: string
+  connection: DemoConnectionKey
+  question: string
+  aliases: string[]
+  followups: string[]
+  shows: string
+  /** The plan as `PLAN_PROPOSED` carries it: every step as first written. */
+  plan: PlanView
+  /** Steps sharpened once their dependencies answered, in order. */
+  revisions: Revision[]
+  steps: ScriptedDeepStep[]
+  /** One per prefix of the plan: `answers[k - 1]` is written from `k` steps. */
+  answers: ScriptedDeepAnswer[]
 }

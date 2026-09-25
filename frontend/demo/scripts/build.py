@@ -16,7 +16,10 @@ Nothing in `mock/fixtures/*.generated.ts` is typed by hand. This script:
    frozen at `DEMO_TODAY`;
 5. runs the backend's **result checks** and **chart planner/compiler** on the
    rows, including every alternative type for *Change chart*;
-6. writes the narrative from those rows and checks its figures against them.
+6. writes the narrative from those rows and checks its figures against them;
+7. runs every step of the scripted deep analyses the same way, closes each one
+   with the deep pipeline's own disclosure and computation, and checks every
+   cited sentence of the answer against the step it cites (`run_deep`).
 
 `build-fixtures.sh` starts and removes the scratch containers around this.
 """
@@ -49,7 +52,10 @@ from app.domain.ports.database import ResultColumn  # noqa: E402
 from app.domain.value_objects import HintBudget  # noqa: E402
 from app.infra.connectors.mysql import MySqlConnector  # noqa: E402
 from app.infra.connectors.postgres import PostgresConnector  # noqa: E402
+from app.pipeline import evidence as ev  # noqa: E402
 from app.pipeline.checks import inspect_result  # noqa: E402
+from app.pipeline.state import ExecutionResult, PlanRevision, PlanStep, StepEvidence  # noqa: E402
+from app.reports import checks  # noqa: E402
 from app.sqlguard import GuardPolicy, guard  # noqa: E402
 
 import questions as Q  # noqa: E402
@@ -246,6 +252,46 @@ async def run_question(
     codes = [f.code for f in findings]
     inspect_step = {"status": "DONE", "detail": f"Noted: {', '.join(codes)}" if codes else "No issues found"}
 
+    names = [c.name for c in result.columns]
+    text = q.narrative(Q.Result(names, result.rows, codes))
+    # A figure the question itself states ("the last 90 days") is not a claim.
+    stated = [float(n) for n in re.findall(r"\d+", q.text)]
+    check_figures(text, result.rows, stated)
+
+    charts = charts_for(result, q.chart)
+    out.update(
+        template_check=template_checks(final["raw_sql"], q.text, snapshot, dialect),
+        answer=text,
+        attempts=attempts,
+        result=result_record(result, scanned),
+        chart=charts["chart"],
+        kpi=charts["kpi"],
+        chart_step=charts["chart_step"],
+        inspect_step=inspect_step,
+        findings=[f.model_dump(mode="json") for f in findings],
+        options=charts["options"],
+        redraws=charts["redraws"],
+    )
+    return out
+
+
+def result_record(result: Any, scanned: int | None) -> dict[str, Any]:
+    """A result as the TABLE artifact and the live preview carry it."""
+    return {
+        "columns": [{"name": c.name, "db_type": c.db_type, "semantic_type": c.semantic_type} for c in result.columns],
+        "rows": result.rows,
+        "row_count": result.row_count,
+        "truncated": result.truncated,
+        "duration_ms": result.duration_ms,
+        "rows_scanned_estimate": scanned,
+    }
+
+
+def charts_for(result: Any, proposed: dict[str, Any] | None) -> dict[str, Any]:
+    """What the `chart` node makes of a result, and every *Change chart* answer.
+
+    `proposed` is the chart the model suggested for it; None, it declined.
+    """
     columns = [ResultColumn(name=c.name, db_type=c.db_type, semantic_type=c.semantic_type) for c in result.columns]
     profile = profile_result(columns, result.rows, truncated=result.truncated)
     blocked = unchartable_reason(profile)
@@ -259,7 +305,7 @@ async def run_question(
         else:
             chart_detail = {"status": "SKIPPED", "detail": blocked}
     else:
-        suggestion = ChartIntent.model_validate(q.chart) if q.chart else ChartIntent(chart_type="none")
+        suggestion = ChartIntent.model_validate(proposed) if proposed else ChartIntent(chart_type="none")
         plan = plan_chart(profile, suggestion)
         if plan.intent is None:
             chart_detail = {"status": "SKIPPED", "detail": plan.reason or "No chart fits"}
@@ -280,34 +326,115 @@ async def run_question(
                 "spec": compile_vega_lite(plan.intent, profile, columns, result.rows),
                 "chart_type": plan.intent.chart_type, "reason": None,
             }
+    return {"chart": chart, "kpi": kpi, "chart_step": chart_detail, "options": options, "redraws": redraws}
 
-    names = [c.name for c in result.columns]
-    text = q.narrative(Q.Result(names, result.rows, codes))
-    # A figure the question itself states ("the last 90 days") is not a claim.
-    stated = [float(n) for n in re.findall(r"\d+", q.text)]
-    check_figures(text, result.rows, stated)
 
-    out.update(
-        template_check=template_checks(final["raw_sql"], q.text, snapshot, dialect),
-        answer=text,
-        attempts=attempts,
-        result={
-            "columns": [{"name": c.name, "db_type": c.db_type, "semantic_type": c.semantic_type} for c in result.columns],
-            "rows": result.rows,
-            "row_count": result.row_count,
-            "truncated": result.truncated,
-            "duration_ms": result.duration_ms,
-            "rows_scanned_estimate": scanned,
-        },
-        chart=chart,
-        kpi=kpi,
-        chart_step=chart_detail,
-        inspect_step=inspect_step,
-        findings=[f.model_dump(mode="json") for f in findings],
-        options=options,
-        redraws=redraws,
-    )
-    return out
+# ── one deep analysis ──────────────────────────────────────────────────────
+async def run_deep(
+    q: Q.DeepQuestion, snapshot: dict[str, Any], dialect: str, policy_name: str, conn: Any, today: date,
+) -> dict[str, Any]:
+    """A deep run, step by step, through the pieces the deep graph is made of.
+
+    Each step's statement goes through the real guard and the real connector,
+    and is closed by `evidence.close_step` — the same disclosure under the
+    connection's policy and the same `app.analysis` computation the `compute`
+    node runs — so the plan panel shows the backend's own summaries. The
+    answer is checked by `reports.checks.check_claims` against each step's
+    `evidence.pool`, which is exactly what `synthesize` checks it against: a
+    sentence citing step 3 may only state figures step 3's writer was given.
+
+    The answer is built for every prefix of the plan, because *Answer now*
+    can stop it after any step, and each of those is checked the same way.
+    """
+    policy = policy_for(snapshot, dialect)
+    planned: list[dict[str, Any]] = []
+    revisions: list[dict[str, Any]] = []
+    evidences: list[StepEvidence] = []
+    results: list[Q.Result] = []
+    steps: list[dict[str, Any]] = []
+    for i, s in enumerate(q.steps):
+        assert all(0 <= d < i for d in s.depends_on), f"{q.id}: step {i + 1} depends forward"
+        step = PlanStep(question=s.question, intent=s.intent, why=s.why, tool=s.tool, depends_on=s.depends_on)
+        first = step
+        if s.planned:
+            # `_revise` only reads a step's dependencies, so one with none has
+            # nothing to be sharpened by.
+            assert s.depends_on, f"{q.id}: step {i + 1} is revised but depends on nothing"
+            first = step.model_copy(update={"question": s.planned, "why": s.planned_why or s.why})
+            revisions.append(PlanRevision(index=i, replaced=first, by=step).model_dump(mode="json"))
+        planned.append(first.model_dump(mode="json"))
+
+        report, executable = guard(s.sql, policy)
+        if report.status != "VALID":
+            raise AssertionError(f"{q.id}: step {i + 1} was rejected: {report.to_feedback()}")
+        exec_sql = freeze(executable, today, dialect)
+        result = await conn.execute(exec_sql, max_rows=MAX_ROWS, statement_timeout_ms=30000)
+        scanned = await conn.explain(exec_sql)
+        findings = inspect_result(
+            question=s.question, sql=executable, dialect=dialect, tables=snapshot["tables"],
+            row_count=result.row_count, column_count=len(result.columns), truncated=result.truncated,
+        )
+        retryable = [f.code for f in findings if f.retry]
+        if retryable:
+            raise AssertionError(f"{q.id}: step {i + 1}'s result checks would retry on {retryable}")
+        codes = [f.code for f in findings]
+
+        # Attempts are numbered across the whole run, as `generated_queries` is.
+        attempt_no = i + 1
+        execution = ExecutionResult(
+            columns=[ResultColumn(name=c.name, db_type=c.db_type, semantic_type=c.semantic_type) for c in result.columns],
+            rows=result.rows, row_count=result.row_count, truncated=result.truncated,
+            duration_ms=result.duration_ms, rows_scanned_estimate=scanned,
+        )
+        evidence = ev.close_step(
+            StepEvidence(index=i, step=step, first_attempt=i, last_attempt=attempt_no,
+                         execution=execution, status="DONE"),
+            policy_name,
+        )
+        evidences.append(evidence)
+        results.append(Q.Result([c.name for c in result.columns], result.rows, codes, evidence.computed))
+        steps.append({
+            "evidence": ev.step_payload(evidence, executable),
+            "attempt": {
+                "attempt_no": attempt_no,
+                "raw_sql": s.sql,
+                "rewritten_sql": executable,
+                "validation_status": report.status,
+                "validation_report": report.model_dump(mode="json"),
+                "referenced_tables": sorted(report.referenced_tables),
+            },
+            "result": result_record(result, scanned),
+            "inspect_step": {"status": "DONE", "detail": f"Noted: {', '.join(codes)}" if codes else "No issues found"},
+            **charts_for(result, s.chart),
+        })
+
+    answers: list[dict[str, Any]] = []
+    for ran in range(1, len(q.steps) + 1):
+        prose = q.answer(results[:ran])
+        clean, claims = checks.parse_claims(prose, results=ran)
+        blocks = [ev.narration(e) for e in evidences[:ran]]
+        context = " ".join([q.text, *(e.step.question for e in evidences[:ran])])
+        check = checks.check_claims(claims, [ev.pool(b) for b in blocks], context=context)
+        uncited = [c.text for c in check.claims if c.cites is None]
+        unsupported = [(c.text, [f.model_dump(mode="json") for f in c.unsupported]) for c in check.claims if c.unsupported]
+        if uncited or unsupported:
+            raise AssertionError(f"{q.id} after {ran} steps: uncited {uncited}, unsupported {unsupported}")
+        answers.append({
+            "steps": ran,
+            "streamed": prose,
+            "answer": clean,
+            "claims": [c.model_dump(mode="json") for c in check.claims],
+            "traceable": check.traceable,
+        })
+
+    return {
+        "id": q.id, "connection": q.connection, "question": q.text, "aliases": q.aliases,
+        "followups": q.followups, "shows": q.shows,
+        "plan": {"restatement": q.restatement, "steps": planned, "stop_when": q.stop_when},
+        "revisions": revisions,
+        "steps": steps,
+        "answers": answers,
+    }
 
 
 # ── sections and the template editor ─────────────────────────────────────
@@ -433,6 +560,7 @@ async def main() -> None:
     snapshots: dict[str, dict[str, Any]] = {}
     sections: dict[str, dict[str, Any]] = {}
     answers: list[dict[str, Any]] = []
+    deeps: list[dict[str, Any]] = []
     for name, spec in CONNECTIONS.items():
         conn = connector(name, *endpoints[name])
         try:
@@ -447,11 +575,17 @@ async def main() -> None:
                 rows = a["result"]["row_count"] if a["result"] else "—"
                 chart = (a.get("chart_step") or {}).get("detail", "")
                 print(f"  ✓ {q.id:22} rows={rows!s:>4}  {chart}")
+            for d in [d for d in Q.DEEP_QUESTIONS if d.connection == name]:
+                deeps.append(await run_deep(d, snapshots[name], spec["dialect"], spec["policy"], conn, today))
+                last = deeps[-1]
+                traced = last["answers"][-1]["traceable"]
+                print(f"  ✓ {d.id:22} steps={len(d.steps)}  revised={len(last['revisions'])}  "
+                      f"traceable={'—' if traced is None else f'{traced:.0%}'}")
         finally:
             await conn.close()
 
-    ids = {a["id"] for a in answers}
-    for a in answers:
+    ids = {a["id"] for a in answers} | {d["id"] for d in deeps}
+    for a in [*answers, *deeps]:
         missing = [f for f in a["followups"] if f not in ids]
         assert not missing, f"{a['id']} suggests unknown questions {missing}"
     assert all(g in ids for g in Q.GUIDE) and all(h in ids for h, *_ in Q.HISTORY)
@@ -478,6 +612,12 @@ async def main() -> None:
         f"/** The guide's questions, in the brief's order. */\nexport const GUIDE = {_json(Q.GUIDE)}\n\n"
         "/** The sidebar's conversations: question id, days before DEMO_TODAY, hour of day. */\n"
         f"export const HISTORY: [string, number, number][] = {_json([list(h) for h in Q.HISTORY])}\n"
+    ))
+    write("deep.generated.ts", (
+        "import type { ScriptedDeep } from '../script-types'\n\n"
+        f"export const BUILT_FOR = '{today.isoformat()}'\n\n"
+        "/** Every scripted deep analysis, from a real run of each step's statement. */\n"
+        f"export const DEEP: ScriptedDeep[] = {_json(deeps)}\n"
     ))
     write("catalog.generated.ts", (
         "import type { CapabilityEntry, ParameterCatalog } from '../../../src/api/types'\n\n"

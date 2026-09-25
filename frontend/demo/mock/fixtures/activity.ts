@@ -36,7 +36,7 @@ export interface Operation {
 
 /** Who asks, how often on a working day, and which model they reach for. */
 const ASKERS: { id: string; name: string; perDay: number; sonnet: number; until?: number }[] = [
-  { id: IDS.users.sam, name: 'Sam Rivera', perDay: 7.5, sonnet: 0.8 },
+  { id: IDS.users.mazbar, name: 'Mazbar Azami', perDay: 7.5, sonnet: 0.8 },
   { id: IDS.users.priya, name: 'Priya Nair', perDay: 5.2, sonnet: 0.55 },
   { id: IDS.users.tomas, name: 'Tomás Álvarez', perDay: 4.1, sonnet: 0.7 },
   { id: IDS.users.leila, name: 'Leila Karimi', perDay: 2.6, sonnet: 0.9 },
@@ -216,20 +216,20 @@ export function usageTotal(params: { since?: string; until?: string; tz_offset?:
  * the way `GET /audit` serves it.
  */
 export const AUDIT: AuditEntry[] = ([
-  [0.2, 'Sam Rivera', 'grant.created', 'connection', IDS.connections.sales, 'SUCCESS', { privilege: 'select', team_id: IDS.teams.finance }],
+  [0.2, 'Mazbar Azami', 'grant.created', 'connection', IDS.connections.sales, 'SUCCESS', { privilege: 'select', team_id: IDS.teams.finance }],
   [0.9, 'Olivia Bennett', 'access.denied', 'conversation', null, 'DENIED', { needed: 'conversation.create' }],
   [1.3, 'Leila Karimi', 'knowledge.feedback.recorded', 'run', null, 'SUCCESS', { verdict: 'NEEDS_REVIEW' }],
   [2.1, 'Priya Nair', 'disclosure.changed', 'connection', IDS.connections.sakila, 'SUCCESS', { from: 'SAMPLE', to: 'AGGREGATE' }],
   [2.1, 'Priya Nair', 'grant.created', 'connection', IDS.connections.sakila, 'SUCCESS', { privilege: 'select', team_id: IDS.teams.analytics }],
-  [3.4, 'Sam Rivera', 'role.assigned', 'user', IDS.users.leila, 'SUCCESS', { role: 'Knowledge Manager' }],
+  [3.4, 'Mazbar Azami', 'role.assigned', 'user', IDS.users.leila, 'SUCCESS', { role: 'Knowledge Manager' }],
   [4.0, 'Marcus Johnson', 'access.denied', 'connection', IDS.connections.sales, 'DENIED', { needed: 'select' }],
-  [5.6, 'Sam Rivera', 'team.member.added', 'team', IDS.teams.revops, 'SUCCESS', { user_id: IDS.users.tomas }],
+  [5.6, 'Mazbar Azami', 'team.member.added', 'team', IDS.teams.revops, 'SUCCESS', { user_id: IDS.users.tomas }],
   [6.2, 'Priya Nair', 'llm_config.endpoint.changed', 'llm_config', IDS.llm.gpt, 'SUCCESS', { field: 'base_url' }],
-  [8.8, 'Sam Rivera', 'grant.revoked', 'connection', IDS.connections.sales, 'SUCCESS', { privilege: 'select', user_id: IDS.users.hannah }],
-  [9.0, 'Sam Rivera', 'user.manage', 'user', IDS.users.hannah, 'SUCCESS', { status: 'DISABLED' }],
-  [12.5, 'Sam Rivera', 'service_user.created', 'user', IDS.service.digest, 'SUCCESS', { roles: 1 }],
+  [8.8, 'Mazbar Azami', 'grant.revoked', 'connection', IDS.connections.sales, 'SUCCESS', { privilege: 'select', user_id: IDS.users.hannah }],
+  [9.0, 'Mazbar Azami', 'user.manage', 'user', IDS.users.hannah, 'SUCCESS', { status: 'DISABLED' }],
+  [12.5, 'Mazbar Azami', 'service_user.created', 'user', IDS.service.digest, 'SUCCESS', { roles: 1 }],
   [14.1, 'Tomás Álvarez', 'ownership.transferred', 'dashboard', null, 'SUCCESS', { to: IDS.users.chen }],
-  [19.7, 'Sam Rivera', 'team.created', 'team', IDS.teams.revops, 'SUCCESS', {}],
+  [19.7, 'Mazbar Azami', 'team.created', 'team', IDS.teams.revops, 'SUCCESS', {}],
 ] as [number, string, string, string, string | null, string, Record<string, unknown>][])
   .map(([days, actor, action, resource_type, resource_id, outcome, detail], i) => ({
     at: daysAgo(days, 17 - (i % 7)),

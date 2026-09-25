@@ -22,7 +22,7 @@ const id = (group: number, n: number) =>
 
 export const IDS = {
   users: {
-    sam: id(1, 1), priya: id(1, 2), tomas: id(1, 3), leila: id(1, 4),
+    mazbar: id(1, 1), priya: id(1, 2), tomas: id(1, 3), leila: id(1, 4),
     chen: id(1, 5), olivia: id(1, 6), marcus: id(1, 7), hannah: id(1, 8), jonas: id(1, 9),
   },
   service: { digest: id(2, 1) },
@@ -37,7 +37,7 @@ export const IDS = {
 } as const
 
 /** What the login page is pre-filled with. Any input signs in. */
-export const DEMO_CREDENTIALS = { email: 'sam@lumen-supply.example', password: 'datamind-demo' }
+export const DEMO_CREDENTIALS = { email: 'mazbar.azami@lumen-supply.example', password: 'datamind-demo' }
 
 // ── roles, as seeded ─────────────────────────────────────────────────────────
 const ALL_ADMIN = [
@@ -117,7 +117,7 @@ interface Person {
 }
 
 const PEOPLE: Person[] = [
-  { key: 'sam', name: 'Sam Rivera', email: DEMO_CREDENTIALS.email, status: 'ACTIVE', roles: ['administrator'], teams: ['analytics'], joined: 410 },
+  { key: 'mazbar', name: 'Mazbar Azami', email: DEMO_CREDENTIALS.email, status: 'ACTIVE', roles: ['administrator'], teams: ['analytics'], joined: 410 },
   { key: 'priya', name: 'Priya Nair', email: 'priya.nair@lumen-supply.example', status: 'ACTIVE', roles: ['dataEngineer'], teams: ['analytics'], joined: 388 },
   { key: 'tomas', name: 'Tomás Álvarez', email: 'tomas.alvarez@lumen-supply.example', status: 'ACTIVE', roles: ['biEngineer'], teams: ['analytics', 'revops'], joined: 301 },
   { key: 'leila', name: 'Leila Karimi', email: 'leila.karimi@lumen-supply.example', status: 'ACTIVE', roles: ['knowledgeManager', 'normal'], teams: ['analytics'], joined: 244 },
@@ -159,9 +159,10 @@ export function userOf(person: Person, withPermissions = false): User {
     ...(withPermissions
       ? {
           capabilities: capabilitiesOf(reaching),
-          // Deep analysis is built and shipped off: the installation does not
-          // offer it, whatever a role holds. See docs/status.md §3.
-          features: [],
+          // Deep analysis is on in the demo, so the composer offers Quick and
+          // Deep. The product ships it off (docs/status.md §3); what the demo
+          // plays in Deep is a recorded run, not a claim that it is shipped.
+          features: ['deep'],
         }
       : {}),
   }
@@ -275,7 +276,7 @@ export const CONNECTIONS: Connection[] = [
     last_tested_at: daysAgo(0, 9.2),
     last_synced_at: daysAgo(0, 9.25),
     privileges: OWNER_PRIVILEGES,
-    owner: 'Sam Rivera',
+    owner: 'Mazbar Azami',
   },
   {
     id: IDS.connections.sakila,
@@ -304,6 +305,19 @@ export const CONNECTIONS: Connection[] = [
     owner: 'Priya Nair',
   },
 ]
+
+/**
+ * What one deep analysis may spend on either connection: the installation's
+ * defaults, unnarrowed. `connections.deepBudget` serves it and a deep run's
+ * `BUDGET_SPENT` gauge is measured against it.
+ */
+export const DEEP_LIMITS = {
+  max_steps: 5,
+  max_queries: 8,
+  max_rows_total: 20000,
+  max_prompt_tokens: 200000,
+  deadline_seconds: 300,
+}
 
 // ── model providers ──────────────────────────────────────────────────────────
 /**

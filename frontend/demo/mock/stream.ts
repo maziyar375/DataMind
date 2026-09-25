@@ -16,10 +16,12 @@
  * is what the real SSE endpoint does from `Last-Event-ID`.
  */
 import type { Connection, LlmConfig, RunDetail, RunEvent, RunStep } from '../../src/api/types'
-import type { ScriptedAnswer } from './script-types'
+import type { Revision } from '../../src/components/deep-plan'
+import type { ScriptedAnswer, ScriptedChart, ScriptedDeep } from './script-types'
 import { SNAPSHOTS } from './fixtures/schema.generated'
+import { DEEP_LIMITS } from './fixtures/world'
 import {
-  FALLBACK_TICK_MS, RUN_START_MS, STEP_MS, TEXT_CHUNK_CHARS, TEXT_TICK_MS,
+  DEEP_MS, FALLBACK_TICK_MS, RUN_START_MS, STEP_MS, TEXT_CHUNK_CHARS, TEXT_TICK_MS,
 } from './timing'
 
 export interface TimedEvent {
@@ -57,27 +59,23 @@ function chunks(text: string, size: number): string[] {
   return out
 }
 
-export function scriptRun(
-  answer: ScriptedAnswer,
-  connection: Connection,
-  model: LlmConfig,
-  runId: string,
-): Timeline {
-  const key = answer.connection
-  const events: TimedEvent[] = []
-  const steps: RunStep[] = []
-  let t = RUN_START_MS
-  let seq = 0
-  let prompt = 0
-  let completion = 0
-  const schema = tokens(schemaChars(key))
-  const tableCount = SNAPSHOTS[key].tables.length
-
-  events.push({
+/**
+ * The pen a timeline is written with. `step` appends one node's
+ * `STEP_STARTED`/`STEP_FINISHED` pair at the running clock and records the
+ * step as the finished run keeps it; `stream` spreads prose over a node as
+ * `TEXT_DELTA`s; `finish` closes the run. A chat run and a deep run are both
+ * written with it, so their trails cannot drift apart in how a step is timed.
+ */
+function recorder(runId: string, model: LlmConfig, connection: Connection) {
+  const events: TimedEvent[] = [{
     at: 0,
     type: 'RUN_STARTED',
     data: { run_id: runId, model: model.model, connection: connection.name },
-  })
+  }]
+  const steps: RunStep[] = []
+  const spent = { prompt: 0, completion: 0 }
+  let t = RUN_START_MS
+  let seq = 0
 
   function step(
     name: string,
@@ -98,8 +96,8 @@ export function scriptRun(
       data: { seq, name, status, detail, duration_ms: duration },
     })
     if (usage) {
-      prompt += usage.prompt
-      completion += usage.completion
+      spent.prompt += usage.prompt
+      spent.completion += usage.completion
     }
     steps.push({
       seq, name, status, detail, duration_ms: duration,
@@ -117,6 +115,49 @@ export function scriptRun(
       events.push({ at: Math.min(end - 5, start + 90 + i * gap), type: 'TEXT_DELTA', data: { text: part } })
     })
   }
+
+  function finish(repairs: number): Timeline {
+    const total = t + 60
+    events.push({
+      at: total,
+      type: 'RUN_FINISHED',
+      data: { status: 'SUCCEEDED', error_code: null, repair_count: repairs, total_latency_ms: total },
+    })
+    events.sort((a, b) => a.at - b.at)
+    return { events, steps, total, repairs, promptTokens: spent.prompt, completionTokens: spent.completion }
+  }
+
+  return { events, spent, step, stream, finish, now: () => t }
+}
+
+/** The `chart` node over the result that was charted: its verdict, and the artifact it made. */
+function chartNode(step: Pen['step'], events: TimedEvent[], charted: ScriptedChart | null) {
+  const verdict = charted?.chart_step ?? { status: 'SKIPPED' as const, detail: 'Nothing chartable' }
+  const chartType = /^(\w+) chart/.exec(verdict.detail)?.[1]
+  step('chart', verdict.status, verdict.detail, STEP_MS.chart,
+    verdict.status === 'DONE' && verdict.detail !== 'big number' ? { prompt: 520, completion: 58 } : undefined,
+    (_start, end) => {
+      if (verdict.status === 'DONE') {
+        events.push({
+          at: end - 1, type: 'ARTIFACT_CREATED',
+          data: charted?.kpi ? { kind: 'KPI' } : { kind: 'CHART', chart_type: chartType, source: /\((\w+)\)/.exec(verdict.detail)?.[1] },
+        })
+      }
+    })
+}
+
+type Pen = ReturnType<typeof recorder>
+
+export function scriptRun(
+  answer: ScriptedAnswer,
+  connection: Connection,
+  model: LlmConfig,
+  runId: string,
+): Timeline {
+  const key = answer.connection
+  const { events, step, stream, finish } = recorder(runId, model, connection)
+  const schema = tokens(schemaChars(key))
+  const tableCount = SNAPSHOTS[key].tables.length
 
   const metadata = answer.intent === 'METADATA'
   step('route', 'DONE', `Classified ${answer.intent} in ${STEP_MS.route}ms`, STEP_MS.route,
@@ -199,29 +240,201 @@ export function scriptRun(
       { prompt: 380 + tokens(answer.attempts.at(-1)!.raw_sql.length) + shared, completion: tokens(answer.answer.length) },
       (start, end) => stream(answer.answer, start, end))
 
-    const verdict = answer.chart_step ?? { status: 'SKIPPED' as const, detail: 'Nothing chartable' }
-    const chartType = /^(\w+) chart/.exec(verdict.detail)?.[1]
-    step('chart', verdict.status, verdict.detail, STEP_MS.chart,
-      verdict.status === 'DONE' && verdict.detail !== 'big number' ? { prompt: 520, completion: 58 } : undefined,
+    chartNode(step, events, answer)
+  }
+
+  return finish(Math.max(0, answer.attempts.length - 1))
+}
+
+/** Why a deep run stopped short of its plan. '' is "it did not". */
+export type DeepStop = '' | 'answer_now'
+
+/** `nodes/deep.py`'s `_STOPPED`, for the one ending the demo can reach. */
+const STOPPED: Record<Exclude<DeepStop, ''>, string> = {
+  answer_now: 'you asked for an answer now',
+}
+
+export interface DeepTimeline extends Timeline {
+  /** When each step that ran started, ms into the run — what *Answer now* is measured against. */
+  stepStarts: number[]
+  /** How many of the planned steps ran. */
+  ran: number
+  stop: DeepStop
+  /** The answer as stored: the product's preface, if any, then the writer's clean prose. */
+  answer: string
+  /** The `ANALYSIS` artifact `nodes/deep.analysis_record` writes when the run ends. */
+  analysis: Record<string, unknown>
+}
+
+/** `BUDGET_SPENT`, as `nodes/deep._spent` words it. One statement per step: no step here repairs. */
+function spentOf(steps: number, rows: number, prompt: number) {
+  return {
+    steps, max_steps: DEEP_LIMITS.max_steps,
+    queries: steps, max_queries: DEEP_LIMITS.max_queries,
+    rows, max_rows: DEEP_LIMITS.max_rows_total,
+    prompt_tokens: prompt, max_prompt_tokens: DEEP_LIMITS.max_prompt_tokens,
+  }
+}
+
+/**
+ * A deep analysis, played the way the deep graph runs one:
+ *
+ *   route → plan → [ step → scope → retrieve → generate → validate → execute
+ *                    → inspect → compute ] × steps → synthesize → chart
+ *
+ * with `PLAN_PROPOSED` at the end of `plan`, `PLAN_REVISED` inside the `step`
+ * that sharpens a step, and `STEP_EVIDENCE` + `BUDGET_SPENT` at the end of
+ * each `compute` — the payloads recorded by `build.py`'s `run_deep`.
+ *
+ * `ran` is how many steps run: all of them, or fewer after *Answer now*. The
+ * step in flight when it was pressed still finishes, then `synthesize`
+ * writes from what was found, opening with the product's own sentence saying
+ * how much of the plan the answer stands on (`nodes/deep._preface`).
+ */
+export function scriptDeep(
+  deep: ScriptedDeep,
+  connection: Connection,
+  model: LlmConfig,
+  runId: string,
+  ran: number = deep.steps.length,
+): DeepTimeline {
+  const key = deep.connection
+  const { events, spent, step, stream, finish, now } = recorder(runId, model, connection)
+  const schema = tokens(schemaChars(key))
+  const tableCount = SNAPSHOTS[key].tables.length
+  const planned = deep.plan.steps.length
+  const stop: DeepStop = ran < planned ? 'answer_now' : ''
+
+  step('route', 'DONE', `Classified ANALYTICAL in ${STEP_MS.route}ms`, STEP_MS.route,
+    { prompt: 104, completion: 2 })
+  step('plan', 'DONE', `${planned} steps planned`, DEEP_MS.plan,
+    { prompt: schema + 1150, completion: tokens(JSON.stringify(deep.plan).length) },
+    (_start, end) => events.push({
+      at: end - 2, type: 'PLAN_PROPOSED', data: { ...deep.plan, max_steps: DEEP_LIMITS.max_steps },
+    }))
+
+  const stepStarts: number[] = []
+  const current = [...deep.plan.steps]
+  const revisions: Revision[] = []
+  let rows = 0
+  for (let i = 0; i < ran; i++) {
+    const scripted = deep.steps[i]
+    const revision = deep.revisions.find((r) => r.index === i) ?? null
+    const depends = deep.plan.steps[i].depends_on
+    const question = (revision?.by ?? deep.plan.steps[i]).question
+    // The reviser reads what the dependencies found, disclosed.
+    const findings = depends.reduce(
+      (n, d) => n + tokens(JSON.stringify(deep.steps[d].result.rows.slice(0, 50)).length), 0)
+    stepStarts.push(now())
+    step('step', 'DONE',
+      `Step ${i + 1} of ${planned}${revision ? ' (revised)' : ''}: ${question.slice(0, 160)}`,
+      depends.length ? DEEP_MS.revise : DEEP_MS.step,
+      depends.length ? { prompt: 620 + findings, completion: revision ? 74 : 14 } : undefined,
       (_start, end) => {
-        if (verdict.status === 'DONE') {
-          events.push({
-            at: end - 1, type: 'ARTIFACT_CREATED',
-            data: answer.kpi ? { kind: 'KPI' } : { kind: 'CHART', chart_type: chartType, source: /\((\w+)\)/.exec(verdict.detail)?.[1] },
-          })
-        }
+        if (!revision) return
+        events.push({ at: end - 2, type: 'PLAN_REVISED', data: { ...revision } })
+        revisions.push(revision)
+        current[i] = revision.by
+      })
+    step('scope', 'SKIPPED', null, STEP_MS.scope)
+    step('retrieve', 'DONE', `${tableCount} tables via FULL_SNAPSHOT`, STEP_MS.retrieve)
+
+    const attempt = scripted.attempt
+    step('generate', 'DONE', `Attempt ${attempt.attempt_no} drafted`, STEP_MS.generate,
+      { prompt: schema + 540 + tokens(question.length), completion: tokens(attempt.raw_sql.length) + 24 },
+      (_start, end) => events.push({
+        at: end - 2, type: 'SQL_GENERATED', data: { attempt_no: attempt.attempt_no, sql: attempt.raw_sql },
+      }))
+    step('validate', 'DONE', `Valid · ${attempt.referenced_tables.length} tables`, STEP_MS.validate,
+      undefined, (_start, end) => events.push({
+        at: end - 1, type: 'SQL_VALIDATED',
+        data: {
+          attempt_no: attempt.attempt_no, sql: attempt.rewritten_sql,
+          referenced_tables: attempt.referenced_tables,
+          limit_applied: attempt.validation_report.limit_applied ?? null,
+        },
+      }))
+
+    const result = scripted.result
+    step('execute', 'DONE', `${result.row_count} rows in ${result.duration_ms}ms`,
+      result.duration_ms + STEP_MS.executeOverhead, undefined, (_start, end) => {
+        events.push({
+          at: end - 2, type: 'QUERY_COMPLETED',
+          data: {
+            row_count: result.row_count, duration_ms: result.duration_ms,
+            truncated: result.truncated, rows_scanned_estimate: result.rows_scanned_estimate,
+          },
+        })
+        events.push({
+          at: end - 1, type: 'RESULT_PREVIEW',
+          data: { columns: result.columns, rows: result.rows, row_count: result.row_count, truncated: result.truncated },
+        })
+      })
+    step('inspect', scripted.inspect_step.status, scripted.inspect_step.detail, STEP_MS.inspect)
+
+    rows += result.row_count
+    const found = scripted.evidence
+    const computed = found.computed
+    step('compute', 'DONE',
+      `Step ${i + 1}: ${found.row_count} rows`
+        + (computed
+          ? ` · ${computed.tool.toLowerCase().replace(/_/g, ' ')} ${computed.ok ? 'computed' : `refused (${computed.refusal})`}`
+          : ''),
+      DEEP_MS.compute, undefined, (_start, end) => {
+        events.push({ at: end - 2, type: 'STEP_EVIDENCE', data: { ...found } })
+        events.push({ at: end - 1, type: 'BUDGET_SPENT', data: spentOf(i + 1, rows, spent.prompt) })
       })
   }
 
-  const repairs = Math.max(0, answer.attempts.length - 1)
-  const total = t + 60
-  events.push({
-    at: total,
-    type: 'RUN_FINISHED',
-    data: { status: 'SUCCEEDED', error_code: null, repair_count: repairs, total_latency_ms: total },
-  })
-  events.sort((a, b) => a.at - b.at)
-  return { events, steps, total, repairs, promptTokens: prompt, completionTokens: completion }
+  const preface = stop
+    ? `This answer is built from ${ran} of ${planned} planned steps: the analysis stopped early because ${STOPPED[stop]}.`
+    : ''
+  const written = ran > 0 ? deep.answers[ran - 1] : null
+  // `_plain`, for the one road here with nothing to write from.
+  const body = written ? written.answer : 'No step of the analysis produced a result.'
+  const answer = `${preface}\n\n${body}`.trim()
+  const narrated = deep.steps.slice(0, ran)
+    .reduce((n, s) => n + 120 + tokens(JSON.stringify(s.result.rows.slice(0, 50)).length), 0)
+  step('synthesize', 'DONE',
+    written
+      ? `${ran} of ${planned} steps · ${written.claims.length} claims`
+        + (written.traceable === null ? '' : ` · ${Math.round(written.traceable * 100)}% traceable`)
+      : `0 of ${planned} steps · written without a model (nothing to write from)`,
+    written ? DEEP_MS.synthesize : DEEP_MS.compute,
+    written ? { prompt: 900 + narrated, completion: tokens(written.streamed.length) } : undefined,
+    (start, end) => {
+      if (preface) events.push({ at: start + 40, type: 'TEXT_DELTA', data: { text: `${preface}\n\n` } })
+      if (!written) {
+        events.push({ at: start + 60, type: 'TEXT_DELTA', data: { text: body } })
+        return
+      }
+      // The markers stream as the writer wrote them; the stored answer has
+      // them lifted out, so the live text is replaced with it at the end.
+      stream(written.streamed, start + (preface ? 60 : 0), end - 20)
+      events.push({ at: end - 3, type: 'TEXT_RESET', data: { reason: 'citations' } })
+      events.push({ at: end - 2, type: 'TEXT_DELTA', data: { text: answer } })
+    })
+
+  const charted = ran > 0 ? deep.steps[ran - 1] : null
+  chartNode(step, events, charted)
+
+  const timeline = finish(0)
+  return {
+    ...timeline,
+    stepStarts,
+    ran,
+    stop,
+    answer,
+    analysis: {
+      plan: { ...deep.plan, steps: current },
+      revisions,
+      steps: deep.steps.slice(0, ran).map((s) => s.evidence),
+      stop_reason: stop,
+      claims: written?.claims ?? [],
+      traceable: written?.traceable ?? null,
+      budget: spentOf(ran, rows, timeline.promptTokens ?? 0),
+    },
+  }
 }
 
 /**

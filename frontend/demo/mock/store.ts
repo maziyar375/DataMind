@@ -14,10 +14,13 @@ import type {
 } from '../../src/api/types'
 import { demoIso, demoNow, daysAgo } from './clock'
 import { ANSWERS, BUILT_FOR, HISTORY } from './fixtures/answers.generated'
+import { DEEP } from './fixtures/deep.generated'
 import { DEMO_TODAY } from './fixtures/today'
 import { CONNECTIONS, IDS, LLM_CONFIGS } from './fixtures/world'
-import type { ScriptedAnswer } from './script-types'
-import { scriptFallback, scriptRun, stepsAt, type Timeline } from './stream'
+import type { ScriptedAnswer, ScriptedChart, ScriptedDeep } from './script-types'
+import {
+  scriptDeep, scriptFallback, scriptRun, stepsAt, type DeepTimeline, type Timeline,
+} from './stream'
 
 export interface StoredTurn {
   messageId: string
@@ -41,8 +44,14 @@ export interface StoredRun {
   conversationId: string
   userMessageId: string
   assistantMessageId: string
+  /** QUICK or DEEP — what the composer was set to when this was asked. */
+  depth: 'QUICK' | 'DEEP'
   /** The scripted answer, or null for the demo's own "I can't answer that". */
   answerId: string | null
+  /** The scripted deep analysis, on a DEEP run that has one. */
+  deepId: string | null
+  /** When *Answer now* was pressed on a deep run, on the demo clock. */
+  answerNowAt: number | null
   fallback: string | null
   connectionId: string
   llmConfigId: string
@@ -61,6 +70,10 @@ interface State {
 const KEY = 'datamind-demo:session:v1'
 
 export const ANSWERS_BY_ID = new Map(ANSWERS.map((a) => [a.id, a]))
+export const DEEP_BY_ID = new Map(DEEP.map((d) => [d.id, d]))
+
+/** Deep analyses already in the sidebar: (id, days before DEMO_TODAY, hour). */
+const DEEP_HISTORY: [string, number, number][] = [['deep-june', 2, 15.3]]
 
 if (BUILT_FOR !== DEMO_TODAY) {
   console.warn(
@@ -95,7 +108,10 @@ function seed(): State {
       conversationId,
       userMessageId: turn.messageId,
       assistantMessageId: `0000000d-0000-4000-8000-${(i + 1).toString(16).padStart(12, '0')}`,
+      depth: 'QUICK',
       answerId,
+      deepId: null,
+      answerNowAt: null,
       fallback: null,
       connectionId: connection.id,
       llmConfigId: model.id,
@@ -114,6 +130,26 @@ function seed(): State {
       turns: [turn],
     })
   })
+  DEEP_HISTORY.forEach(([deepId, days, hour], j) => {
+    const deep = DEEP_BY_ID.get(deepId)!
+    const connection = CONNECTIONS.find((c) => c.id === IDS.connections[deep.connection])!
+    const askedAt = Date.parse(daysAgo(days, hour))
+    const n = (HISTORY.length + j + 1).toString(16).padStart(12, '0')
+    const turn: StoredTurn = {
+      messageId: `0000000b-0000-4000-8000-${n}`, question: deep.question, askedAt,
+      runIds: [`0000000c-0000-4000-8000-${n}`],
+    }
+    runs.push({
+      id: turn.runIds[0], conversationId: `0000000a-0000-4000-8000-${n}`, userMessageId: turn.messageId,
+      assistantMessageId: `0000000d-0000-4000-8000-${n}`, depth: 'DEEP', answerId: null, deepId,
+      answerNowAt: null, fallback: null, connectionId: connection.id, llmConfigId: LLM_CONFIGS[0].id,
+      startedAt: askedAt + 400, cancelledAt: null, feedback: null, overridden: false,
+    })
+    conversations.push({
+      id: `0000000a-0000-4000-8000-${n}`, title: titleOf(deep.question), connectionId: connection.id,
+      llmConfigId: LLM_CONFIGS[0].id, createdAt: askedAt - 5000, updatedAt: askedAt + 40000, turns: [turn],
+    })
+  })
   return { builtFor: BUILT_FOR, conversations, runs }
 }
 
@@ -127,7 +163,8 @@ function load(): State {
     const raw = sessionStorage.getItem(KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as State
-      if (parsed.builtFor === BUILT_FOR) return parsed
+      // A session from before deep runs existed: its runs are all quick ones.
+      if (parsed.builtFor === BUILT_FOR && parsed.runs.every((r) => 'depth' in r)) return parsed
     }
   } catch {
     /* private mode, blocked storage: a fresh session is the right answer */
@@ -152,16 +189,61 @@ export function answerOf(run: StoredRun): ScriptedAnswer | null {
   return run.answerId ? ANSWERS_BY_ID.get(run.answerId) ?? null : null
 }
 
+export function deepOf(run: StoredRun): ScriptedDeep | null {
+  return run.deepId ? DEEP_BY_ID.get(run.deepId) ?? null : null
+}
+
+/**
+ * A run's timeline. Keyed by *Answer now* as well as the run, because pressing
+ * it rewrites the run's ending: the steps after the one in flight never start,
+ * and `synthesize` writes from what was found. Everything up to that moment is
+ * the same in both, so a stream already playing carries on seamlessly.
+ */
 export function timelineOf(run: StoredRun): Timeline {
-  let timeline = timelines.get(run.id)
+  const key = `${run.id}:${run.answerNowAt ?? ''}`
+  let timeline = timelines.get(key)
   if (!timeline) {
     const answer = answerOf(run)
+    const deep = deepOf(run)
     const connection = CONNECTIONS.find((c) => c.id === run.connectionId)!
     const model = LLM_CONFIGS.find((m) => m.id === run.llmConfigId) ?? LLM_CONFIGS[0]
-    timeline = answer ? scriptRun(answer, connection, model, run.id) : scriptFallback(run.fallback ?? '')
-    timelines.set(run.id, timeline)
+    if (deep) {
+      timeline = scriptDeep(deep, connection, model, run.id)
+      if (run.answerNowAt !== null) {
+        // The loop reads the request on the edge before each step, so the
+        // steps that had started by then are the steps that run.
+        const pressed = run.answerNowAt - run.startedAt
+        const ran = (timeline as DeepTimeline).stepStarts.filter((at) => at <= pressed).length
+        if (ran < deep.steps.length) timeline = scriptDeep(deep, connection, model, run.id, ran)
+      }
+    } else {
+      timeline = answer ? scriptRun(answer, connection, model, run.id) : scriptFallback(run.fallback ?? '')
+    }
+    timelines.set(key, timeline)
   }
   return timeline
+}
+
+function deepTimelineOf(run: StoredRun): DeepTimeline | null {
+  return run.deepId ? (timelineOf(run) as DeepTimeline) : null
+}
+
+/**
+ * The result the finished turn shows, and its chart: the answer's own, or on
+ * a deep run the last step that ran — which is what `synthesize` hands the
+ * `chart` node.
+ */
+export function chartedOf(run: StoredRun): (ScriptedChart & { result: ScriptedAnswer['result'] }) | null {
+  const deep = deepTimelineOf(run)
+  if (deep) return deep.ran > 0 ? deepOf(run)!.steps[deep.ran - 1] : null
+  return answerOf(run)
+}
+
+/** The statement a curator would open: the answer's last draft, or the charted step's. */
+export function lastSqlOf(run: StoredRun): string {
+  const deep = deepTimelineOf(run)
+  if (deep) return deep.ran > 0 ? deepOf(run)!.steps[deep.ran - 1].attempt.raw_sql : ''
+  return answerOf(run)?.attempts.at(-1)?.raw_sql ?? ''
 }
 
 export type RunState = 'RUNNING' | 'SUCCEEDED' | 'CANCELLED'
@@ -172,20 +254,22 @@ export function stateOf(run: StoredRun, now = demoNow()): RunState {
   return now >= end ? 'SUCCEEDED' : 'RUNNING'
 }
 
-function queriesUpTo(answer: ScriptedAnswer, timeline: Timeline, elapsed: number): GeneratedQuery[] {
+function queriesUpTo(attempts: ScriptedAnswer['attempts'], timeline: Timeline, elapsed: number): GeneratedQuery[] {
   const judged = new Set(
     timeline.events
       .filter((e) => e.at <= elapsed && (e.type === 'SQL_VALIDATED' || e.type === 'SQL_REJECTED'))
       .map((e) => e.data.attempt_no as number),
   )
-  return answer.attempts
+  return attempts
     .filter((a) => judged.has(a.attempt_no))
     .map((a) => ({
       attempt_no: a.attempt_no,
       raw_sql: a.raw_sql,
       rewritten_sql: a.rewritten_sql,
       validation_status: a.validation_status,
-      validation_report: a.validation_report,
+      // As served: the API sends `hint: null` where the SPA's type says absent,
+      // and the SPA reads it as falsy either way.
+      validation_report: a.validation_report as GeneratedQuery['validation_report'],
       referenced_tables: a.referenced_tables,
     }))
 }
@@ -206,25 +290,38 @@ function knowledgeOf(run: StoredRun): RunKnowledge {
 }
 
 export function artifactsOf(run: StoredRun): Artifact[] {
-  const answer = answerOf(run)
-  if (!answer?.result) return []
-  const { columns, rows, row_count, truncated } = answer.result
-  const out: Artifact[] = [{
-    id: `${run.id.slice(0, 24)}000000000001`,
-    kind: 'TABLE',
-    spec: { columns, rows, row_count, truncated },
-  }]
-  if (answer.chart) {
-    out.push({ id: `${run.id.slice(0, 24)}000000000002`, kind: 'CHART', spec: answer.chart as Artifact['spec'] })
+  const charted = chartedOf(run)
+  const out: Artifact[] = []
+  if (charted?.result) {
+    const { columns, rows, row_count, truncated } = charted.result
+    out.push({
+      id: `${run.id.slice(0, 24)}000000000001`,
+      kind: 'TABLE',
+      spec: { columns, rows, row_count, truncated },
+    })
+    if (charted.chart) {
+      out.push({ id: `${run.id.slice(0, 24)}000000000002`, kind: 'CHART', spec: charted.chart as Artifact['spec'] })
+    }
+    if (charted.kpi) {
+      out.push({ id: `${run.id.slice(0, 24)}000000000003`, kind: 'KPI', spec: charted.kpi as unknown as Artifact['spec'] })
+    }
   }
-  if (answer.kpi) {
-    out.push({ id: `${run.id.slice(0, 24)}000000000003`, kind: 'KPI', spec: answer.kpi as unknown as Artifact['spec'] })
+  const deep = deepTimelineOf(run)
+  if (deep) {
+    out.push({ id: `${run.id.slice(0, 24)}000000000004`, kind: 'ANALYSIS', spec: deep.analysis as Artifact['spec'] })
   }
   return out
 }
 
+/** Every statement a run judged, in order: the answer's drafts, or one per deep step that ran. */
+function attemptsOf(run: StoredRun): ScriptedAnswer['attempts'] {
+  const deep = deepTimelineOf(run)
+  if (deep) return deepOf(run)!.steps.slice(0, deep.ran).map((s) => s.attempt)
+  return answerOf(run)?.attempts ?? []
+}
+
 export function detailOf(run: StoredRun, now = demoNow()): RunDetail {
-  const answer = answerOf(run)
+  const charted = chartedOf(run)
   const timeline = timelineOf(run)
   const status = stateOf(run, now)
   const connection = CONNECTIONS.find((c) => c.id === run.connectionId)!
@@ -235,12 +332,12 @@ export function detailOf(run: StoredRun, now = demoNow()): RunDetail {
     id: run.id,
     conversation_id: run.conversationId,
     status,
-    depth: 'QUICK',
+    depth: run.depth,
     error_code: null,
     error_message: null,
     repair_count: done ? timeline.repairs : 0,
     total_latency_ms: done ? timeline.total : status === 'CANCELLED' ? Math.round(cut) : null,
-    db_latency_ms: done && answer?.result ? answer.result.duration_ms : null,
+    db_latency_ms: done && charted?.result ? charted.result.duration_ms : null,
     model_snapshot: {
       provider: model.provider, model: model.model, temperature: model.temperature,
       max_tokens: model.max_tokens, connection_name: connection.name, prompt_version: 'v12',
@@ -253,7 +350,7 @@ export function detailOf(run: StoredRun, now = demoNow()): RunDetail {
     retrieval_sections: [],
     steps: done ? timeline.steps : stepsAt(timeline, cut),
     artifacts: done ? artifactsOf(run) : [],
-    queries: answer ? (done ? queriesUpTo(answer, timeline, Infinity) : queriesUpTo(answer, timeline, cut)) : [],
+    queries: queriesUpTo(attemptsOf(run), timeline, done ? Infinity : cut),
     knowledge: knowledgeOf(run),
     restricted: false,
     restricted_reason: null,
@@ -292,14 +389,15 @@ export function messagesOf(conversation: StoredConversation, now = demoNow()): M
       continue
     }
     const answer = answerOf(run)
+    const deep = deepTimelineOf(run)
     seq += 1
     out.push({
       id: run.assistantMessageId,
       seq,
       role: 'ASSISTANT',
-      content: answer ? answer.answer : run.fallback,
+      content: deep ? deep.answer : answer ? answer.answer : run.fallback,
       created_at: demoIso(run.startedAt + timelineOf(run).total),
-      run: answer ? detailOf(run, now) : null,
+      run: answer || deep ? detailOf(run, now) : null,
     })
   }
   return out
@@ -327,6 +425,7 @@ export function askedIn(conversation: StoredConversation): Set<string> {
   for (const turn of conversation.turns) {
     const run = latestRun(turn)
     if (run?.answerId) asked.add(run.answerId)
+    if (run?.deepId) asked.add(run.deepId)
   }
   return asked
 }

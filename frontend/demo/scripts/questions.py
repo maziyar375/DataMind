@@ -30,6 +30,8 @@ class Result:
     #: Codes of the advisory findings `inspect` raised — the caveats `present`
     #: is handed and asked to work into the answer.
     findings: list[str] = field(default_factory=list)
+    #: A deep step's computation (`pipeline/evidence.compute`), or None.
+    computed: dict[str, Any] | None = None
 
     def col(self, name: str) -> list[Any]:
         i = self.columns.index(name)
@@ -605,4 +607,265 @@ HISTORY = [
     ("order-value-channel", 3, 10.2),
     ("sakila-actors", 6, 14.8),
     ("carrier-speed", 9, 11.5),
+]
+
+
+# ── deep analyses ──────────────────────────────────────────────────────────
+@dataclass
+class DeepStep:
+    """One step of a scripted plan: the sub-question, and the statement that ran.
+
+    The fields are `pipeline/state.PlanStep`'s. `planned` is the wording the
+    planner first wrote when the step was sharpened once its dependencies had
+    answered (`PLAN_REVISED`); None, it ran as planned. A step that depends on
+    nothing is never revised, because the reviser has nothing to read.
+    """
+    question: str
+    intent: str                          # CONFIRM | DECOMPOSE | COMPARE | DRILL | CHECK
+    why: str
+    tool: str                            # SQL | CONTRIBUTION | COMPARE_PERIODS | OUTLIERS
+    sql: str
+    depends_on: list[int] = field(default_factory=list)
+    planned: str | None = None
+    planned_why: str | None = None
+    #: What the model proposes to the chart node if this step's result is the
+    #: one charted — the last step, or the last one to run before *Answer now*.
+    chart: dict[str, Any] | None = None
+
+
+@dataclass
+class DeepQuestion:
+    """A why-question, answered by a plan of several steps.
+
+    `answer` is the writer's prose, `[n]`-cited, written from the steps'
+    results. It is called with **every prefix** of them, because *Answer now*
+    stops a plan after any step and the answer is then written from what was
+    found: it must say what those steps establish and nothing more. `build.py`
+    checks every version with the backend's own `check_claims`.
+    """
+    id: str
+    connection: str
+    text: str
+    aliases: list[str]
+    restatement: str
+    stop_when: str
+    steps: list[DeepStep]
+    answer: Callable[[list[Result]], str]
+    shows: str = ""
+    followups: list[str] = field(default_factory=list)
+
+
+#: The products of Meridian's June order, as a sentence names them. Not the
+#: catalogue names: `check_claims` reads the "4K" in `Arcwave 27" 4K Monitor`
+#: as the figure 4,000, and a writer quoting it would be flagged for a number
+#: no row holds. What a careful writer does instead is name the kind of thing.
+_MERIDIAN_LINES = {
+    'Arcwave 27" 4K Monitor': "Arcwave 27-inch monitors",
+    "Northpeak Thunderbolt 4 Dock": "Northpeak Thunderbolt docks",
+    "Keystone Slim Low-Profile Keyboard": "Keystone keyboards",
+    "Lumen Dual Monitor Arm": "dual monitor arms",
+}
+
+
+def june_spike(steps: list[Result]) -> str:
+    sentences: list[str] = []
+    if len(steps) >= 5:
+        sentences.append("Most of June's jump came from one unusually large order [5].")
+
+    months = steps[0].dicts()
+    by_month = {m["month"][5:7]: m for m in months}
+    may, jun, jul = by_month["05"], by_month["06"], by_month["07"]
+    check(max(months, key=lambda m: m["revenue"]) is jun, "June is the highest of the six months")
+    check(abs(jun["orders"] - may["orders"]) / may["orders"] < 0.05, "June had about as many orders as May")
+    check(jun["avg_order_value"] > may["avg_order_value"] * 1.4, "June's average order is far larger")
+    sentences.append(
+        f"June 2026 brought in {money(jun['revenue'])}, against {money(may['revenue'])} in May and "
+        f"{money(jul['revenue'])} in July, from almost the same number of orders ({jun['orders']} "
+        f"against {may['orders']} and {jul['orders']}), so the average order rose to "
+        f"${jun['avg_order_value']:,.2f} from ${may['avg_order_value']:,.2f} [1]."
+    )
+
+    if len(steps) >= 2:
+        rows = steps[1].dicts()
+        before = {r["segment"]: r["revenue"] for r in rows if r["month"][5:7] == "05"}
+        after = {r["segment"]: r["revenue"] for r in rows if r["month"][5:7] == "06"}
+        change = sum(after.values()) - sum(before.values())
+        share = (after["Enterprise"] - before["Enterprise"]) / change * 100
+        check(steps[1].computed is not None and steps[1].computed["ok"], "the contribution computed")
+        check(share > 90, "Enterprise carries the increase")
+        check(after["SMB"] < before["SMB"], "SMB fell")
+        sentences.append(
+            f"Revenue rose by {money(change)} ({change / sum(before.values()) * 100:.1f}%) from May to June, "
+            f"and the Enterprise segment accounts for {share:.1f}% of that rise on its own, while SMB "
+            f"revenue fell to {money(after['SMB'])} from {money(before['SMB'])} [2]."
+        )
+
+    if len(steps) >= 3:
+        rows = steps[2].dicts()
+        first, second = rows[0], rows[1]
+        check(first["customer"].startswith("Meridian Health Systems"), "Meridian leads June")
+        check(first["revenue"] > second["revenue"] * 5, "Meridian is far above the next customer")
+        check(steps[2].computed is not None and "Meridian" in steps[2].computed["summary"],
+              "the outlier computation flags Meridian")
+        sentences.append(
+            f"Of the {len(rows)} Enterprise customers who bought in June, one stands far above the rest: "
+            f"Meridian Health Systems, with {money(first['revenue'])} against {money(second['revenue'])} "
+            f"for the next, {second['customer']} [3]."
+        )
+
+    if len(steps) >= 4:
+        lines = steps[3].dicts()
+        orders = {line["order_id"] for line in lines}
+        check(len(orders) == 1, "Meridian's June revenue is one order")
+        check(all(line["product"] in _MERIDIAN_LINES for line in lines), "the order is the four products named")
+        placed = date.fromisoformat(lines[0]["order_date"])
+        items = [f"{line['quantity']} {_MERIDIAN_LINES[line['product']]}" for line in lines]
+        listed = ", ".join(items[:-1]) + f" and {items[-1]}" if len(items) > 1 else items[0]
+        sentences.append(f"That was a single order, placed on {placed.day} June, for {listed} [4].")
+
+    if len(steps) >= 5:
+        rows = steps[4].dicts()
+        june = next(r for r in rows if r["month"][5:7] == "06")
+        others = [r["revenue_without_largest_order"] for r in rows if r is not june]
+        check(abs(june["largest_order"] - steps[2].dicts()[0]["revenue"]) < 0.01,
+              "June's largest order is Meridian's")
+        check(june["revenue_without_largest_order"] > max(others), "June still leads without it")
+        gap_before = jun["revenue"] - may["revenue"]
+        gap_after = june["revenue_without_largest_order"] - by_month_of(rows, "05")["revenue_without_largest_order"]
+        check(gap_after < gap_before / 3, "most of the lead came from that order")
+        sentences.append(
+            f"Take each month's largest order out and June still leads at "
+            f"{money(june['revenue_without_largest_order'])}, but by far less: the other five months then sit "
+            f"between {money(min(others))} and {money(max(others))} [5]."
+        )
+    return " ".join(sentences)
+
+
+def by_month_of(rows: list[dict[str, Any]], month: str) -> dict[str, Any]:
+    return next(r for r in rows if r["month"][5:7] == month)
+
+
+DEEP_QUESTIONS: list[DeepQuestion] = [
+    DeepQuestion(
+        id="deep-june", connection="sales",
+        text="Why was June revenue so much higher than the months around it?",
+        aliases=["why was june revenue so high", "why was june so high", "why did revenue spike in june",
+                 "why was revenue so high in june", "what happened to revenue in june",
+                 "why was june revenue higher than may and july"],
+        restatement=(
+            "Explain why June 2026 revenue stands so far above May and July: whether more orders or "
+            "larger ones drove it, which customer segment and which customers account for the "
+            "increase, and how June compares once unusual orders are set aside."
+        ),
+        stop_when=(
+            "The increase over May is traced to specific customers or orders, or shown to be spread "
+            "across the business."
+        ),
+        steps=[
+            DeepStep(
+                question="What were revenue, order count and average order value in each of the last six complete months?",
+                intent="CONFIRM", tool="SQL",
+                why="Confirms how far June stands above its neighbours, and whether more orders or bigger ones produced it.",
+                sql="""SELECT date_trunc('month', o.order_date)::date AS month,
+       SUM(o.total_amount) AS revenue,
+       COUNT(*) AS orders,
+       ROUND(AVG(o.total_amount), 2) AS avg_order_value
+FROM public.orders AS o
+WHERE o.status IN ('completed', 'shipped')
+  AND o.order_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '6 months'
+  AND o.order_date < date_trunc('month', CURRENT_DATE)
+GROUP BY 1
+ORDER BY 1""",
+                chart={"chart_type": "line", "x_axis": {"field": "month", "type": "temporal"}, "y_axis": {"field": "revenue", "type": "quantitative", "aggregation": "none"}},
+            ),
+            DeepStep(
+                question="How did revenue by customer segment change from May to June 2026?",
+                intent="DECOMPOSE", tool="CONTRIBUTION", depends_on=[0],
+                why="Attributes the increase to the segments that moved.",
+                sql="""SELECT date_trunc('month', o.order_date)::date AS month,
+       c.segment,
+       SUM(o.total_amount) AS revenue
+FROM public.orders AS o
+JOIN public.customers AS c ON c.id = o.customer_id
+WHERE o.status IN ('completed', 'shipped')
+  AND o.order_date >= DATE '2026-05-01'
+  AND o.order_date < DATE '2026-07-01'
+GROUP BY 1, 2
+ORDER BY 1, 2""",
+                chart={"chart_type": "bar", "x_axis": {"field": "segment", "type": "nominal"}, "y_axis": {"field": "revenue", "type": "quantitative", "aggregation": "none"}, "series": {"field": "month", "type": "temporal"}},
+            ),
+            DeepStep(
+                question="Which Enterprise customers' revenue in June 2026 stands out?",
+                intent="DRILL", tool="OUTLIERS", depends_on=[1],
+                why="Enterprise carried the whole increase, so the search narrows to its customers.",
+                planned="Which customers' revenue in June 2026 stands out?",
+                planned_why="Finds whether a few customers account for the increase.",
+                sql="""SELECT c.name AS customer,
+       SUM(o.total_amount) AS revenue
+FROM public.orders AS o
+JOIN public.customers AS c ON c.id = o.customer_id
+WHERE o.status IN ('completed', 'shipped')
+  AND c.segment = 'Enterprise'
+  AND o.order_date >= DATE '2026-06-01'
+  AND o.order_date < DATE '2026-07-01'
+GROUP BY c.name
+ORDER BY revenue DESC""",
+                chart={"chart_type": "bar", "x_axis": {"field": "customer", "type": "nominal"}, "y_axis": {"field": "revenue", "type": "quantitative", "aggregation": "none"}},
+            ),
+            DeepStep(
+                question="What did Meridian Health Systems Inc. order in June 2026?",
+                intent="DRILL", tool="SQL", depends_on=[2],
+                why="One customer stands out, so its June orders are listed line by line.",
+                planned="What did the customers that stand out order in June 2026?",
+                planned_why="Shows whether the increase is one purchase or many.",
+                sql="""SELECT o.id AS order_id,
+       o.order_date,
+       p.name AS product,
+       oi.quantity,
+       oi.line_total
+FROM public.orders AS o
+JOIN public.customers AS c ON c.id = o.customer_id
+JOIN public.order_items AS oi ON oi.order_id = o.id
+JOIN public.products AS p ON p.id = oi.product_id
+WHERE o.status IN ('completed', 'shipped')
+  AND c.name = 'Meridian Health Systems Inc.'
+  AND o.order_date >= DATE '2026-06-01'
+  AND o.order_date < DATE '2026-07-01'
+ORDER BY oi.line_total DESC""",
+                chart={"chart_type": "bar", "x_axis": {"field": "product", "type": "nominal"}, "y_axis": {"field": "line_total", "type": "quantitative", "aggregation": "none"}},
+            ),
+            DeepStep(
+                question="What would each of the last six complete months look like without its single largest order?",
+                intent="CHECK", tool="SQL", depends_on=[0],
+                why="Removes the biggest order from every month alike, so June is compared on the same terms as the rest.",
+                sql="""WITH ranked AS (
+  SELECT date_trunc('month', o.order_date)::date AS month,
+         o.total_amount,
+         ROW_NUMBER() OVER (PARTITION BY date_trunc('month', o.order_date)
+                            ORDER BY o.total_amount DESC) AS rank_in_month
+  FROM public.orders AS o
+  WHERE o.status IN ('completed', 'shipped')
+    AND o.order_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '6 months'
+    AND o.order_date < date_trunc('month', CURRENT_DATE)
+)
+SELECT to_char(month, 'YYYY-MM') AS month,
+       SUM(total_amount) AS revenue,
+       SUM(total_amount) FILTER (WHERE rank_in_month > 1) AS revenue_without_largest_order,
+       MAX(total_amount) AS largest_order
+FROM ranked
+GROUP BY month
+ORDER BY month""",
+                # A combo draws bars, so the month is text: on a date axis each
+                # bar is a hairline at the first of its month.
+                chart={"chart_type": "combo",
+                       "x_axis": {"field": "month", "type": "nominal", "label": "Month"},
+                       "y_axis": {"field": "revenue", "type": "quantitative", "aggregation": "none", "label": "Revenue"},
+                       "y2_axis": {"field": "revenue_without_largest_order", "type": "quantitative", "aggregation": "none",
+                                   "label": "Without its largest order"}},
+            ),
+        ],
+        answer=june_spike,
+        shows="A deep analysis: a five-step plan, two steps sharpened as the evidence arrives, and an answer whose every sentence cites the step it came from.",
+        followups=["revenue-trend", "top-products", "region-revenue"],
+    ),
 ]

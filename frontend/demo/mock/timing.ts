@@ -57,3 +57,24 @@ export const FALLBACK_TICK_MS = 16
 
 /** Any other request: long enough to show a spinner, short enough not to wait on. */
 export const REQUEST_MS = 120
+
+/**
+ * A deep analysis. The chat nodes inside each step (`scope` … `inspect`) keep
+ * their `STEP_MS` durations; these are the four deep nodes around them.
+ *
+ * The product says "takes a few minutes" and means it. The demo compresses a
+ * five-step plan to about twenty-five seconds — long enough to watch the plan
+ * fill in and to press *Answer now* part-way, short enough to sit through.
+ */
+export const DEEP_MS = {
+  /** One structured call: the restatement, the steps, the stop condition. */
+  plan: 3400,
+  /** `step` on a step with dependencies: the reviser reads what they found. */
+  revise: 1350,
+  /** `step` on a step that depends on nothing: no call, just the cursor. */
+  step: 4,
+  /** `app.analysis` over the rows, and the evidence filed. */
+  compute: 16,
+  /** The answer streams while this runs. */
+  synthesize: 5200,
+} as const
