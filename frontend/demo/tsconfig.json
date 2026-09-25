@@ -1,0 +1,15 @@
+{
+  // Type-checks the browser side of the demo against the real app:
+  //   npx tsc -p demo/tsconfig.json
+  // The mock client is declared against `src/api/client.ts`'s own types, so a
+  // method the real client grows, or a fixture that stops matching
+  // `src/api/types.ts`, fails here. The plugins and the Vite config are
+  // build-time Node code and, like `vite.config.ts`, are left to esbuild.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": "..",
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["./env.d.ts", "./mock", "./shims", "../src/vite-env.d.ts"]
+}
