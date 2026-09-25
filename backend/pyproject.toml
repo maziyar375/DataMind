@@ -13,7 +13,10 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
-    "sqlalchemy>=2.0.36",
+    # `[asyncio]`, not bare: SQLAlchemy 2.1 stopped installing greenlet by
+    # default, and the async engine cannot start without it — a fresh image
+    # built against 2.1 crashed on boot with the bare name.
+    "sqlalchemy[asyncio]>=2.0.36",
     "alembic>=1.14",
     "asyncpg>=0.30",
     # Target-database drivers. All ship wheels and need no system client:
