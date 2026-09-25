@@ -1,13 +1,14 @@
 /**
- * The shapes `scripts/build.py` writes into `fixtures/answers.generated.ts`
- * and `fixtures/deep.generated.ts`.
+ * The shapes `scripts/build.py` writes into `fixtures/*.generated.ts`.
  *
  * Everything that reaches the UI from here is typed against the real
  * `src/api/types` shapes, so a fixture that drifts from what the API serves is
  * a compile error in `demo/tsconfig.json`, not a blank panel in a browser.
  */
 import type {
-  ChartOption, GeneratedQuery, KpiSpec, TableArtifactSpec, TemplateCheckResult,
+  ChartOption, GeneratedQuery, KnowledgeTemplate, KpiSpec, NumericFinding, ReportBlockType, ReportClaim,
+  ReportLanguage, ReportTimeWindow, SqlOrigin, TableArtifactSpec, TableConfig, TemplateCheckResult, TileResult,
+  TileType,
 } from '../../src/api/types'
 import type { DeepClaim, PlanView, Revision, StepFound } from '../../src/components/deep-plan'
 
@@ -117,4 +118,101 @@ export interface ScriptedDeep {
   steps: ScriptedDeepStep[]
   /** One per prefix of the plan: `answers[k - 1]` is written from `k` steps. */
   answers: ScriptedDeepAnswer[]
+}
+
+/** A result as a refresh returns it, less the moment it was computed — the demo's clock adds that. */
+export type RecordedResult = Omit<TileResult, 'computed_at'>
+
+/** One tile as `run_board` recorded it: the tile row, and what a refresh returned for it. */
+export interface ScriptedTile {
+  title: string
+  tile_type: TileType
+  question: string | null
+  sql: string
+  sql_origin: SqlOrigin
+  chart_config: Record<string, unknown> | null
+  table_config: TableConfig | null
+  grid_x: number
+  grid_y: number
+  grid_w: number
+  grid_h: number
+  position: number
+  /** Null for a TEXT tile, which runs nothing. */
+  result: RecordedResult | null
+}
+
+export interface ScriptedBoard {
+  id: string
+  connection: DemoConnectionKey
+  name: string
+  description: string
+  /** Whose board it is: the demo person's own, or a colleague's shared with them. */
+  owner: string
+  /** What the demo person holds on it. */
+  privileges: string[]
+  refresh_seconds: number
+  days_old: number
+  tiles: ScriptedTile[]
+}
+
+/** `check_claims`' record of one section: every claim, before its block is resolved to a result id. */
+export interface RecordedCheck {
+  checked: number
+  findings: NumericFinding[]
+  claims?: Omit<ReportClaim, 'block_result_id'>[]
+  uncited?: number
+}
+
+export interface ScriptedReportBlock {
+  question: string
+  title: string
+  block_type: ReportBlockType
+  sql: string
+  sql_hash: string
+  chart_config: Record<string, unknown> | null
+  time_window: ReportTimeWindow
+  result: RecordedResult
+  /** What *Change chart* on this figure answers, per type — the real compiler's. */
+  options: ChartOption[]
+  redraws: ScriptedAnswer['redraws']
+}
+
+export interface ScriptedReportSection {
+  heading: string
+  intent: string
+  kind: 'NORMAL'
+  blocks: ScriptedReportBlock[]
+  /** The paragraph as stored: the citation markers already lifted into `claims`. */
+  prose: string
+  numeric_check: RecordedCheck
+  claims: Omit<ReportClaim, 'block_result_id'>[]
+}
+
+/** What `run_report` recorded: the outline, one generation of it, and its checks. */
+export interface ScriptedReport {
+  id: string
+  connection: DemoConnectionKey
+  name: string
+  description: string
+  prompt: string
+  language: ReportLanguage
+  owner: string
+  privileges: string[]
+  days_old: number
+  run_days_ago: number
+  summary: { heading: string; intent: string; prose: string; numeric_check: RecordedCheck }
+  sections: ScriptedReportSection[]
+}
+
+/** A saved question as `validate_template` accepted it, and who taught it when. */
+export type ScriptedTemplate = Pick<KnowledgeTemplate,
+  | 'question' | 'question_normalized' | 'sql' | 'params' | 'note' | 'source' | 'literal_provenance'
+  | 'role' | 'status' | 'status_reason' | 'schema_version' | 'referenced_tables'> & {
+  id: string
+  connection: DemoConnectionKey
+  author: string
+  hit_count: number
+  last_hit_days: number | null
+  created_days: number
+  verified_days: number | null
 }

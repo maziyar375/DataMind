@@ -869,3 +869,25 @@ ORDER BY month""",
         followups=["revenue-trend", "top-products", "region-revenue"],
     ),
 ]
+
+
+# ── what the knowledge backlog is built from ───────────────────────────────
+#: How often each recorded question was asked this month, by the demo's
+#: invented colleagues. The backlog turns these into TRAFFIC rows — or FAILED
+#: ones, for a question whose recorded run needed repairing.
+TRAFFIC: dict[str, int] = {
+    "revenue-trend": 14,
+    "top-products": 9,
+    "order-value-channel": 6,
+    "region-revenue": 4,
+    "carrier-speed": 3,
+    "sakila-categories": 5,
+    "sakila-actors": 3,
+}
+
+#: Questions that used a word nothing in the connection knows. The words are
+#: found by the backlog's own `unknown_words`, never listed here.
+UNKNOWN: dict[str, list[tuple[str, int]]] = {
+    "sales": [("What is our churn rate by segment?", 3)],
+    "sakila": [("Late fees by store", 2)],
+}

@@ -75,6 +75,11 @@ head script that prefixes the base path onto `<img>` sources naming a file in
   sentence. A timeline is a
   pure function of the answer and `mock/timing.ts`, so the live trail and the
   persisted one agree.
+- `mock/content.ts` serves the dashboards, reports and knowledge store: the
+  recorded fixtures shaped into the API's types, with ids, owners, privileges
+  and timestamps. A tile's `computed_at` is the one stamp on the **visitor's**
+  clock rather than the demo's, because the dashboard scheduler compares it
+  with `Date.now()`; on the demo's day every tile would look hours overdue.
 - `mock/store.ts` holds the session's conversations and runs in
   `sessionStorage`, so a reload on a deep link, or in the middle of a run,
   comes back where it was.
@@ -107,6 +112,9 @@ of `scripts/build.py`, which runs every scripted statement for real:
    checked: every figure in it must be a cell, a column total, a row count or
    a year. Each narrative asserts the shape it describes, such as "June is the
    outlier", so new data cannot ship a sentence that stopped being true.
+7. The deep analysis, the dashboards, the reports and the knowledge store are
+   recorded the same way, each checked by the backend code that checks the
+   real thing (below).
 
 ```bash
 frontend/demo/scripts/build-fixtures.sh   # needs Docker and a Python that can import backend/
@@ -123,6 +131,7 @@ touches neither the compose stack nor `.data/`.
 | The Sakila schema **and data**, unchanged | The people, teams, service account, audit log and token usage |
 | The eight seeded roles, the capability catalog, the privilege meanings and the provider parameter catalog, dumped from backend code | The two connections' hosts and the two model providers |
 | The node names, detail sentences, event payloads, guard, checks, chart compiler and section proposal | The per-step durations (`timing.ts`) and token counts (sized from the schema) |
+| The tile, report and knowledge checks: `_chart`/`_kpi`, the report worker's `_numeric_check`, `validate_template`, the matcher, the binder and the backlog's own reasons | Who owns and shares each board and report, who taught each template, its hit count, and how often each question was asked this month |
 
 Left out of the `sales` fixture, because they exist to make an eval model
 fail and would only read as noise here: the deprecated `product` table, the
@@ -196,6 +205,50 @@ the two, and so does what an answer is allowed to say.
 
 ---
 
+## Dashboards, reports and the knowledge store
+
+Recorded by `scripts/build.py` from `scripts/demo_dashboards.py`,
+`demo_reports.py` and `demo_knowledge.py`.
+
+**Two dashboards.** *Commercial overview* (Sales warehouse, the demo person's
+own): three KPIs with their month-on-month move and sparkline, revenue over
+two years, channel and region mix, category by segment, top products and
+customers, returns, carrier volume against speed, and stock at its reorder
+level, in sections with a line of prose each. *Rental operations* (Sakila,
+shared read-only by Priya Nair). Each tile is run the way a refresh runs it
+and planned by the dashboard service's own `_chart` / `_kpi`; the build fails
+on a tile that is rejected, returns nothing, or cannot draw what it is. Several
+layout choices exist because of what the planner does with a result, and are
+commented where they are made: three wide KPIs rather than four narrow ones, a
+month as a real date wherever a line should run along it, and no chart of a
+measure that is flat across its categories.
+
+**Two reports**, both over the Sales warehouse because reports refuse Sakila's
+AGGREGATE policy. *Monthly business review — August 2026* (English, the demo
+person's own, so it opens on its outline) and *مرور فروش سه‌ماههٔ تابستان ۲۰۲۶*
+(Persian, shared by Leila Karimi, so it opens read-only). Every block runs like
+a tile. Every paragraph goes through `parse_claims` and the report worker's own
+`_narration` and `_numeric_check`, so a sentence citing figure 2 may only state
+what figure 2's writer was given, and the build fails on an uncited sentence or
+an unsupported figure. The executive summary follows the shape the summary
+prompt asks for and is checked against the sections' prose, which is all its
+writer sees. That check is strict: a month-on-month percentage that appears
+only on a KPI's delta is flagged, so the prose does not quote one.
+
+**The knowledge store.** Six saved questions on Sales and four on Sakila, each
+passed through `validate_template` against the synced snapshot, with its
+tables as the guard reports them. Two chat questions are **answered from the
+store**: *Monthly revenue for Europe* and, on Sakila, *Films in the Comedy
+category*. Each is the matcher's best candidate over the short-circuit
+threshold, with its slot bound by the real binder, so the run skips five nodes,
+goes straight to the guard and carries the Verified badge. Every other
+recorded question's `match` step reports its real best score against the store,
+and the build fails if one would in fact have matched. The *Suggested* tab is
+the backlog's own ranking and wording: BACKFILL from the two board tiles
+recorded as corrected by hand, FAILED for the question whose recorded run needed
+repairing, TRAFFIC for the questions the sidebar asked, and a word nothing in
+the schema knows, found by `unknown_words`.
+
 ## What the demo does and does not show
 
 It shows what is built, and nothing that is not. Where it departs from a
@@ -210,8 +263,10 @@ dressing it up:
   (`docs/status.md` §3). The demo turns the installation switch on so the
   composer offers it; what it plays is a recorded run, not a claim that the
   mode ships.
-- **The knowledge store is empty.** The `match` step reports *No template
-  matched*, and nothing is answered from a saved question.
+- **Nothing is saved.** Boards, reports and templates can be opened, filtered
+  and redrawn, and a figure's *Change chart* answers as it does in chat, but
+  every edit, share, generation and save is refused with a sentence saying so.
+  A forced dashboard refresh returns the same recorded rows, computed now.
 
 No write reaches anything. Connections cannot be tested or re-synced, because
 there is no database behind them. Providers are never called. Keys are never

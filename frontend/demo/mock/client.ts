@@ -23,9 +23,14 @@ import {
 } from '../../src/api/client'
 import type {
   Actions, AnswerFeedback, ChartRedraw, Connection, ConversationSummary, Directory, Grant,
-  KnowledgeHealth, Permissions, Reach, Review, RunEvent, SchemaSnapshot, TemplateCheckResult, User,
+  Permissions, Reach, ReportChart, Review, RunEvent, SchemaSnapshot, TemplateCheckResult, User,
 } from '../../src/api/types'
 import { demoNow } from './clock'
+import {
+  boardAccess, boardIdFor, dashboardDocument, dashboardOf, dashboardSummaries, knowledgeHealth, reportAccess,
+  reportBlockResult, reportIdFor, reportOf, reportRunDetail, reportRuns, reportSummaries, suggestionsFor,
+  templatesFor, tileResults,
+} from './content'
 import { AUDIT, recordOperation, usageByPerson, usageMine, usageTotal } from './fixtures/activity'
 import { CATALOG } from './fixtures/catalog.generated'
 import { SECTIONS, SNAPSHOTS, SNAPSHOT_VERSION } from './fixtures/schema.generated'
@@ -37,7 +42,6 @@ import {
   ANSWERS_BY_ID, answerOf, askedIn, chartedOf, conversationOf, deepOf, detailOf, lastRunIn,
   lastSqlOf, messagesOf, newId, runOf, save, state, stateOf, summaryOf, timelineOf, titleOf, type StoredRun,
 } from './store'
-import { ANSWERS } from './fixtures/answers.generated'
 import { DEEP } from './fixtures/deep.generated'
 import { play, type DeepTimeline } from './stream'
 import { REQUEST_MS, SUGGESTIONS_MS } from './timing'
@@ -76,6 +80,11 @@ function refuse(what: string): Promise<never> {
       title: 'Not available in the demo', status: 409, code: 'E_DEMO_READ_ONLY', detail: `${what} ${DEMO_NOTE}`,
     })), REQUEST_MS),
   )
+}
+
+/** Throw inside a `respond` callback, where an expression is wanted. */
+function fail(err: ApiError): never {
+  throw err
 }
 
 function notFound(noun: string): ApiError {
@@ -254,6 +263,8 @@ const ALL_PRIVILEGES = ['describe', 'select', 'modify', 'delete', 'manage']
 const CAN: Record<string, string> = { view: 'select', edit: 'modify', delete: 'delete', share: 'manage', transfer: 'manage' }
 
 function ownerOf(type: string, id: string): string {
+  if (type === 'dashboard') return boardAccess(id)?.owner ?? DEMO_PERSON.name
+  if (type === 'report') return reportAccess(id)?.owner ?? DEMO_PERSON.name
   if ((type === 'connection' || type === 'knowledge' || type === 'semantic_layer') && id === IDS.connections.sakila) return 'Priya Nair'
   if (type === 'llm_config' && id === IDS.llm.gpt) return 'Priya Nair'
   return DEMO_PERSON.name
@@ -289,6 +300,21 @@ const GRANTS: Record<string, Grant[]> = {
   ],
   [`llm_config:${IDS.llm.gpt}`]: [
     { id: 'g-8', principal_id: IDS.users.mazbar, principal_name: 'Mazbar Azami', principal_kind: 'HUMAN', privilege: 'select', path: 'direct' },
+  ],
+  // Boards and reports: shared with the teams that read them.
+  [`dashboard:${boardIdFor('commercial-overview')}`]: [
+    { id: 'g-9', principal_id: IDS.teams.finance, principal_name: 'Finance', principal_kind: 'TEAM', privilege: 'select', path: 'direct' },
+    { id: 'g-10', principal_id: IDS.users.tomas, principal_name: 'Tomás Álvarez', principal_kind: 'HUMAN', privilege: 'modify', path: 'direct' },
+  ],
+  [`dashboard:${boardIdFor('rental-operations')}`]: [
+    { id: 'g-11', principal_id: IDS.teams.analytics, principal_name: 'Analytics', principal_kind: 'TEAM', privilege: 'select', path: 'direct' },
+  ],
+  [`report:${reportIdFor('monthly-business-review')}`]: [
+    { id: 'g-12', principal_id: IDS.teams.finance, principal_name: 'Finance', principal_kind: 'TEAM', privilege: 'select', path: 'direct' },
+  ],
+  [`report:${reportIdFor('quarterly-sales-review-fa')}`]: [
+    { id: 'g-13', principal_id: IDS.teams.finance, principal_name: 'Finance', principal_kind: 'TEAM', privilege: 'select', path: 'direct' },
+    { id: 'g-14', principal_id: IDS.users.mazbar, principal_name: 'Mazbar Azami', principal_kind: 'HUMAN', privilege: 'select', path: 'direct' },
   ],
 }
 
@@ -347,7 +373,8 @@ export const access: typeof Real.access = {
     const { type, id } = parseBase(base)
     if (type === 'semantic_layer' && !SHOW_SEMANTIC_TAB) return Promise.reject(notFound('Semantic layer'))
     if (type === 'llm_config' && id === IDS.llm.gpt) return respond(actionsFor(type, id, ['describe', 'select']))
-    return respond(actionsFor(type, id))
+    const held = type === 'dashboard' ? boardAccess(id)?.privileges : type === 'report' ? reportAccess(id)?.privileges : undefined
+    return respond(actionsFor(type, id, held))
   },
   directory: () => respond((): Directory => ({
     people: [
@@ -366,7 +393,7 @@ export const access: typeof Real.access = {
     const quote = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
     return [head, ...rows.map((r) => [r.principal_name, r.principal_kind, r.resource_type, r.resource_name, r.privilege, r.path, r.via].map(quote).join(','))].join('\n')
   }),
-  shareCheck: () => respond({ total_connections: 0, unreadable: [] }),
+  shareCheck: () => respond({ total_connections: 1, unreadable: [] }),
   reportShareCheck: () => respond({ total_connections: 1, unreadable: [] }),
 }
 
@@ -430,10 +457,6 @@ export const semantic: typeof Real.semantic = {
 }
 
 // ── knowledge ────────────────────────────────────────────────────────────────
-function health(): KnowledgeHealth {
-  return { total: 0, stale: [], conflicted: [], unused: [], conflict_checks_enabled: false, unused_after_days: 60 }
-}
-
 /** Flags raised in this session, in the curator's queue — the loop, closing. */
 function reviewsFor(connectionId: string): Review[] {
   return state.runs
@@ -455,7 +478,7 @@ function reviewsFor(connectionId: string): Review[] {
 }
 
 function templateCheck(sql: string, accept: string[] | undefined): TemplateCheckResult {
-  const recorded = ANSWERS.find((a) => a.template_check && a.template_check.sql.trim() === sql.trim())
+  const recorded = [...ANSWERS_BY_ID.values()].find((a) => a.template_check && a.template_check.sql.trim() === sql.trim())
   const key = [...(accept ?? [])].sort().join(',')
   const answer = recorded?.template_check?.answers[key]
   if (answer) return answer
@@ -475,12 +498,13 @@ function templateCheck(sql: string, accept: string[] | undefined): TemplateCheck
 export const knowledge: typeof Real.knowledge = {
   reviews: (connectionId, reviewState = 'OPEN') => respond(() => (reviewState === 'OPEN' ? reviewsFor(connectionId) : [])),
   resolve: () => refuse('Flags cannot be resolved here.'),
-  suggestions: () => respond([]),
-  list: () => respond({
-    templates: [], schema_version: SNAPSHOT_VERSION, schema_synced: true, can_curate: true, stale_ids: [], health: health(),
-  }),
+  suggestions: (connectionId) => respond(() => suggestionsFor(connectionId)),
+  list: (connectionId) => respond(() => ({
+    templates: templatesFor(connectionId), schema_version: SNAPSHOT_VERSION, schema_synced: true, can_curate: true,
+    stale_ids: [], health: knowledgeHealth(connectionId),
+  })),
   capabilities: () => respond({ can_curate: true }),
-  health: () => respond(health),
+  health: (connectionId) => respond(() => knowledgeHealth(connectionId)),
   revalidate: () => refuse('The store cannot be swept here.'),
   embeddings: (connectionId) => respond(() => ({
     enabled: false, model: '', dimension: 0, templates: 0, indexed: 0,
@@ -524,13 +548,14 @@ function normalise(text: string): string {
 }
 
 const SUGGESTED: Record<'sales' | 'sakila', string[]> = {
-  sales: ['revenue-trend', 'top-products', 'region-revenue', 'category-fa', 'sales-tables', 'sales-joins'],
-  sakila: ['sakila-categories', 'sakila-actors', 'sakila-tables', 'sakila-joins'],
+  sales: ['revenue-trend', 'top-products', 'region-revenue', 'category-fa', 'verified-europe', 'sales-tables', 'sales-joins'],
+  sakila: ['sakila-categories', 'sakila-actors', 'verified-comedy', 'sakila-tables', 'sakila-joins'],
 }
 
 function findAnswer(content: string, connectionKey: 'sales' | 'sakila') {
   const wanted = normalise(content)
-  const matches = ANSWERS.filter((a) => [a.question, ...a.aliases].some((q) => normalise(q) === wanted))
+  // Every recorded quick answer, including the two a saved question gives.
+  const matches = [...ANSWERS_BY_ID.values()].filter((a) => [a.question, ...a.aliases].some((q) => normalise(q) === wanted))
   return {
     here: matches.find((a) => a.connection === connectionKey) ?? null,
     elsewhere: matches.find((a) => a.connection !== connectionKey) ?? null,
@@ -583,6 +608,10 @@ function deepFallbackText(key: 'sales' | 'sakila', quick: boolean): string {
       + 'shown for the questions it was recorded with, and that is not one of them.'
   return `${lead}\n\n${where}\n\nEverything else this demo can answer is in **Quick**.`
 }
+
+/** *Regenerate* on an answer the knowledge store gave: the run it asks for was never recorded. */
+const UNSTORED_TEXT = '**Demo mode** — asked without the saved question, this would be generated from scratch, '
+  + 'and the demo has no recording of that. Ask it again as usual to see the store answer it.'
 
 /** The demo's own answer in **Quick**, to a question recorded only as a deep analysis. */
 function quickFallbackText(): string {
@@ -637,12 +666,16 @@ export const conversations: typeof Real.conversations = {
     const { here, elsewhere } = findAnswer(payload.content, key)
     const deep = findDeep(payload.content, key)
     // Each mode answers only what it was recorded with; the other mode's
-    // recording is named rather than played under the wrong label.
-    const answer = depth === 'QUICK' ? here : null
+    // recording is named rather than played under the wrong label. So is a
+    // saved question's answer asked for *without* the store — which would be
+    // generated from scratch, and that was never recorded.
+    const unstored = Boolean(payload.skip_templates && here && 'verified' in here)
+    const answer = depth === 'QUICK' && !unstored ? here : null
     const analysis = depth === 'DEEP' ? deep : null
     const fallback = answer || analysis ? null
-      : depth === 'DEEP' ? deepFallbackText(key, Boolean(here))
-        : deep ? quickFallbackText() : fallbackText(key, Boolean(elsewhere))
+      : unstored ? UNSTORED_TEXT
+        : depth === 'DEEP' ? deepFallbackText(key, Boolean(here))
+          : deep ? quickFallbackText() : fallbackText(key, Boolean(elsewhere))
     const now = demoNow()
     const turn = { messageId: newId(), question: payload.content, askedAt: now, runIds: [] as string[] }
     const run: StoredRun = {
@@ -704,9 +737,9 @@ export const sqlDrafts: typeof Real.sqlDrafts = {
 }
 
 export const dashboards: typeof Real.dashboards = {
-  list: () => respond([]),
+  list: () => respond(dashboardSummaries),
   create: () => refuse('Dashboards cannot be created here.'),
-  get: () => Promise.reject(notFound('Dashboard')),
+  get: (id) => respond(() => dashboardOf(id) ?? fail(notFound('Dashboard'))),
   update: () => refuse('Dashboards cannot be edited here.'),
   remove: () => refuse('Dashboards cannot be deleted here.'),
   addTile: () => refuse('Tiles cannot be added here.'),
@@ -714,16 +747,19 @@ export const dashboards: typeof Real.dashboards = {
   removeTile: () => refuse('Tiles cannot be deleted here.'),
   duplicateTile: () => refuse('Tiles cannot be duplicated here.'),
   setLayout: () => refuse('Layouts cannot be saved here.'),
-  exportDocument: () => Promise.reject(notFound('Dashboard')),
+  exportDocument: (id) => respond(() => dashboardDocument(id) ?? fail(notFound('Dashboard'))),
   importDocument: () => refuse('Dashboards cannot be imported here.'),
-  data: () => respond({ results: {} }),
-  tileData: () => Promise.reject(notFound('Tile')),
+  // A forced refresh takes as long as running the tiles would; the rest is a cache read.
+  data: (id, tileIds = [], force = false) => respond(
+    () => ({ results: tileResults(id, tileIds, force) ?? fail(notFound('Dashboard')) }), force ? 700 : REQUEST_MS),
+  tileData: (id, tileId, force = false) => respond(
+    () => tileResults(id, [tileId], force)?.[tileId] ?? fail(notFound('Tile')), force ? 500 : REQUEST_MS),
 }
 
 export const reports: typeof Real.reports = {
-  list: () => respond([]),
+  list: () => respond(reportSummaries),
   create: () => refuse('Reports cannot be created here.'),
-  get: () => Promise.reject(notFound('Report')),
+  get: (id) => respond(() => reportOf(id) ?? fail(notFound('Report'))),
   update: () => refuse('Reports cannot be edited here.'),
   remove: () => refuse('Reports cannot be deleted here.'),
   proposeOutline: () => refuse('No model is called in the demo.'),
@@ -736,12 +772,25 @@ export const reports: typeof Real.reports = {
   checkBlock: () => refuse('Statements cannot be checked against a live database here.'),
   editBlockSql: () => refuse('Reports cannot be edited here.'),
   startRun: () => refuse('Reports cannot be generated here.'),
-  runs: () => respond([]),
-  run: () => Promise.reject(notFound('Report run')),
+  runs: (id) => respond(() => reportRuns(id) ?? []),
+  run: (id, runId) => respond(() => reportRunDetail(id, runId) ?? fail(notFound('Report run'))),
   cancelRun: () => refuse('Reports cannot be generated here.'),
   retrySection: () => refuse('Reports cannot be generated here.'),
   editProse: () => refuse('Reports cannot be edited here.'),
-  redrawBlockChart: () => refuse('Reports cannot be edited here.'),
+  // Answered like *Change chart* in chat, from the real compiler's recorded
+  // redraws; nothing is stored, so the report keeps its published picture.
+  redrawBlockChart: (id, runId, resultId, chartType) => respond((): ReportChart => {
+    const block = reportBlockResult(id, runId, resultId)
+    if (!block) throw notFound('Result')
+    const drawn = block.redraws[chartType]
+    return {
+      spec: drawn?.spec ?? null,
+      chart_source: drawn?.spec ? 'user' : 'none',
+      chart_note: null,
+      reason: drawn ? drawn.reason : 'This result cannot be drawn that way.',
+      options: block.options,
+    }
+  }, 220),
 }
 
 // ── runs ─────────────────────────────────────────────────────────────────────

@@ -18,6 +18,12 @@
 import type { Connection, LlmConfig, RunDetail, RunEvent, RunStep } from '../../src/api/types'
 import type { Revision } from '../../src/components/deep-plan'
 import type { ScriptedAnswer, ScriptedChart, ScriptedDeep } from './script-types'
+
+/** An answer the knowledge store gave: which saved question, bound how, scored how close. */
+export type VerifiedAnswer = ScriptedAnswer & {
+  verified: { template_id: string; question: string; bound_params: Record<string, string>; score: number }
+}
+import { MATCH_BEST } from './fixtures/knowledge.generated'
 import { SNAPSHOTS } from './fixtures/schema.generated'
 import { DEEP_LIMITS } from './fixtures/world'
 import {
@@ -160,17 +166,28 @@ export function scriptRun(
   const tableCount = SNAPSHOTS[key].tables.length
 
   const metadata = answer.intent === 'METADATA'
+  const verified = 'verified' in answer ? (answer as VerifiedAnswer).verified : null
   step('route', 'DONE', `Classified ${answer.intent} in ${STEP_MS.route}ms`, STEP_MS.route,
     { prompt: 104, completion: 2 })
   if (metadata) {
     step('match', 'SKIPPED', 'Not analytical (METADATA)', STEP_MS.skipped)
+  } else if (verified) {
+    // A saved question answered it: the template's statement, bound from the
+    // question, goes straight to the guard — `scope`, `retrieve`, `describe`,
+    // `clarify` and `generate` never run, so they are not in the trail.
+    step('match', 'DONE', `Answered from a saved question (${verified.score.toFixed(2)})`, STEP_MS.matchHit,
+      undefined, (_start, end) => events.push({
+        at: end - 1, type: 'SQL_GENERATED', data: { attempt_no: 1, sql: answer.attempts[0].raw_sql },
+      }))
   } else {
-    step('match', 'DONE', 'No template matched (best 0.00)', STEP_MS.match)
+    step('match', 'DONE', `No template matched (best ${(MATCH_BEST[answer.id] ?? 0).toFixed(2)})`, STEP_MS.match)
   }
   // No sections on either connection: the node says nothing and the trail
   // hides it, exactly as it does for a real connection without sections.
-  step('scope', 'SKIPPED', null, STEP_MS.scope)
-  step('retrieve', 'DONE', `${tableCount} tables via FULL_SNAPSHOT`, STEP_MS.retrieve)
+  if (!verified) {
+    step('scope', 'SKIPPED', null, STEP_MS.scope)
+    step('retrieve', 'DONE', `${tableCount} tables via FULL_SNAPSHOT`, STEP_MS.retrieve)
+  }
 
   if (metadata) {
     // A schema question halts here, with its answer streamed by `describe`.
@@ -179,19 +196,23 @@ export function scriptRun(
       duration, { prompt: schema + 310, completion: tokens(answer.answer.length) },
       (start, end) => stream(answer.answer, start, end))
   } else {
-    step('describe', 'SKIPPED', 'Not a schema question', STEP_MS.skipped)
-    step('clarify', 'DONE', `Answerable as asked, in ${STEP_MS.clarify - 4}ms`, STEP_MS.clarify,
-      { prompt: schema + 270, completion: 36 })
+    if (!verified) {
+      step('describe', 'SKIPPED', 'Not a schema question', STEP_MS.skipped)
+      step('clarify', 'DONE', `Answerable as asked, in ${STEP_MS.clarify - 4}ms`, STEP_MS.clarify,
+        { prompt: schema + 270, completion: 36 })
+    }
 
     answer.attempts.forEach((attempt, i) => {
       const first = i === 0
       const duration = first ? STEP_MS.generate : STEP_MS.regenerate
       const previous = first ? 0 : tokens(answer.attempts[i - 1].raw_sql.length) + 180
-      step('generate', 'DONE', `Attempt ${attempt.attempt_no} drafted`, duration,
-        { prompt: schema + 540 + previous, completion: tokens(attempt.raw_sql.length) + 24 },
-        (_start, end) => events.push({
-          at: end - 2, type: 'SQL_GENERATED', data: { attempt_no: attempt.attempt_no, sql: attempt.raw_sql },
-        }))
+      if (!verified) {
+        step('generate', 'DONE', `Attempt ${attempt.attempt_no} drafted`, duration,
+          { prompt: schema + 540 + previous, completion: tokens(attempt.raw_sql.length) + 24 },
+          (_start, end) => events.push({
+            at: end - 2, type: 'SQL_GENERATED', data: { attempt_no: attempt.attempt_no, sql: attempt.raw_sql },
+          }))
+      }
       const report = attempt.validation_report
       if (attempt.validation_status === 'VALID') {
         step('validate', 'DONE', `Valid · ${attempt.referenced_tables.length} tables`, STEP_MS.validate,

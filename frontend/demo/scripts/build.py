@@ -19,7 +19,11 @@ Nothing in `mock/fixtures/*.generated.ts` is typed by hand. This script:
 6. writes the narrative from those rows and checks its figures against them;
 7. runs every step of the scripted deep analyses the same way, closes each one
    with the deep pipeline's own disclosure and computation, and checks every
-   cited sentence of the answer against the step it cites (`run_deep`).
+   cited sentence of the answer against the step it cites (`run_deep`);
+8. runs every dashboard tile as a refresh would (`run_board`), every report
+   block and paragraph as the report worker would (`run_report`), and every
+   knowledge template through `validate_template`, the matcher and the binder
+   (`taught`, `run_verified`, `backlog`).
 
 `build-fixtures.sh` starts and removes the scratch containers around this.
 """
@@ -58,6 +62,9 @@ from app.pipeline.state import ExecutionResult, PlanRevision, PlanStep, StepEvid
 from app.reports import checks  # noqa: E402
 from app.sqlguard import GuardPolicy, guard  # noqa: E402
 
+import demo_dashboards as D  # noqa: E402
+import demo_knowledge as K  # noqa: E402
+import demo_reports as R  # noqa: E402
 import questions as Q  # noqa: E402
 import warehouse  # noqa: E402
 
@@ -329,6 +336,286 @@ def charts_for(result: Any, proposed: dict[str, Any] | None) -> dict[str, Any]:
     return {"chart": chart, "kpi": kpi, "chart_step": chart_detail, "options": options, "redraws": redraws}
 
 
+# ── a dashboard ────────────────────────────────────────────────────────────
+async def run_statement(
+    sql: str, snapshot: dict[str, Any], dialect: str, conn: Any, today: date, what: str,
+) -> tuple[str, Any]:
+    """A stored statement, the way `execute_saved_sql` runs one: the guard
+    against the synced snapshot, then the connector. Returns the guard's
+    rewrite and the result; a rejection fails the build with the guard's words."""
+    report, executable = guard(sql, policy_for(snapshot, dialect))
+    if report.status != "VALID" or executable is None:
+        raise AssertionError(f"{what}: rejected: {report.to_feedback()}")
+    result = await conn.execute(freeze(executable, today, dialect), max_rows=MAX_ROWS, statement_timeout_ms=30000)
+    if result.row_count == 0:
+        raise AssertionError(f"{what}: returned no rows")
+    return executable, result
+
+
+def tile_result(result: Any, chart: dict[str, Any] | None, *, want_kpi: bool) -> dict[str, Any]:
+    """`TileResult` as the dashboard service returns it, from the backend's
+    own `_chart` and `_kpi`: the stored intent is a suggestion the planner may
+    repair or demote, and a METRIC tile's big number is `plan_kpi`'s."""
+    from app.services.query_service import _chart, _kpi
+
+    columns = [ResultColumn(name=c.name, db_type=c.db_type, semantic_type=c.semantic_type) for c in result.columns]
+    intent = ChartIntent.model_validate(chart) if chart else None
+    spec, source, note = _chart(intent, columns, result.rows, truncated=result.truncated)
+    return {
+        "status": "OK",
+        "columns": [{"name": c.name, "db_type": c.db_type, "semantic_type": c.semantic_type} for c in result.columns],
+        "rows": result.rows,
+        "row_count": result.row_count,
+        "truncated": result.truncated,
+        "duration_ms": result.duration_ms,
+        "vega_spec": spec,
+        "chart_source": source,
+        "chart_note": note,
+        "kpi": _kpi(columns, result.rows) if want_kpi else None,
+        "error": None,
+    }
+
+
+async def run_board(
+    board: Any, snapshot: dict[str, Any], dialect: str, conn: Any, today: date,
+) -> dict[str, Any]:
+    """Every tile of a board, run as a refresh would run it."""
+    tiles: list[dict[str, Any]] = []
+    for position, t in enumerate(board.tiles):
+        record: dict[str, Any] = {
+            "title": t.title, "tile_type": t.tile_type, "question": t.question or None,
+            "sql": "", "sql_origin": t.origin if t.tile_type != "TEXT" else "HANDWRITTEN",
+            "chart_config": t.chart, "table_config": t.table,
+            "grid_x": t.x, "grid_y": t.y, "grid_w": t.w, "grid_h": t.h, "position": position,
+            "result": None,
+        }
+        if t.tile_type != "TEXT":
+            record["sql"], result = await run_statement(
+                t.sql.strip(), snapshot, dialect, conn, today, f"{board.id} / {t.title}")
+            record["result"] = tile_result(result, t.chart, want_kpi=t.tile_type == "METRIC")
+            if t.tile_type == "METRIC" and record["result"]["kpi"] is None:
+                raise AssertionError(f"{board.id} / {t.title}: no big number could be planned")
+            if t.tile_type == "CHART" and record["result"]["vega_spec"] is None:
+                raise AssertionError(f"{board.id} / {t.title}: no chart: {record['result']['chart_note']}")
+        tiles.append(record)
+    return {
+        "id": board.id, "connection": board.connection, "name": board.name,
+        "description": board.description, "owner": board.owner, "privileges": board.privileges,
+        "refresh_seconds": board.refresh_seconds, "days_old": board.days_old, "tiles": tiles,
+    }
+
+
+# ── a report ───────────────────────────────────────────────────────────────
+async def run_report(
+    rep: Any, snapshot: dict[str, Any], dialect: str, policy_name: str, conn: Any, today: date,
+) -> dict[str, Any]:
+    """A report generation, section by section, checked the way the worker checks one.
+
+    Each block runs as `execute_saved_sql` runs it and is planned by `_chart` /
+    `_kpi`. Each section's paragraph goes through `parse_claims` and then the
+    worker's own `_narration` and `_numeric_check` — disclosure under the
+    connection's policy, the facts sheet, and each cited sentence against its
+    own block's pool. The summary is checked with `check_prose` against the
+    figures in the sections' prose, which is all its writer is shown. The build
+    fails on any sentence without a citation or with a figure its block does
+    not support.
+    """
+    from types import SimpleNamespace
+
+    from app.domain.value_objects import ReportBlockResultStatus
+    from app.reports.language import detect
+    from app.services.report_service import sql_fingerprint
+    from app.workers.report import _narration, _numeric_check
+
+    if policy_name not in ("SAMPLE", "FULL"):
+        raise AssertionError(f"{rep.id}: reports refuse the {policy_name} policy")
+    sections: list[dict[str, Any]] = []
+    written: list[str] = []
+    all_results: list[list[Q.Result]] = []
+    for s in rep.sections:
+        blocks: list[dict[str, Any]] = []
+        narrations: list[Any] = []
+        results: list[Q.Result] = []
+        for b in s.blocks:
+            executable, result = await run_statement(b.sql, snapshot, dialect, conn, today, f"{rep.id} / {b.title}")
+            tr = tile_result(result, b.chart, want_kpi=b.block_type == "METRIC")
+            if b.block_type == "CHART" and tr["vega_spec"] is None:
+                raise AssertionError(f"{rep.id} / {b.title}: no chart: {tr['chart_note']}")
+            if b.block_type == "METRIC" and tr["kpi"] is None:
+                raise AssertionError(f"{rep.id} / {b.title}: no big number")
+            narrations.append(_narration(SimpleNamespace(
+                status=ReportBlockResultStatus.OK, question_snapshot=b.question, error_message=None,
+                columns=tr["columns"], rows=tr["rows"], row_count=tr["row_count"], truncated=tr["truncated"],
+                kpi=tr["kpi"],
+            ), policy_name))
+            results.append(Q.Result([c.name for c in result.columns], result.rows))
+            blocks.append({
+                "question": b.question, "title": b.title, "block_type": b.block_type, "sql": b.sql,
+                "sql_hash": sql_fingerprint(b.sql), "chart_config": b.chart, "time_window": b.time_window,
+                "result": tr,
+                # What *Change chart* on this figure answers, per type.
+                **{k: v for k, v in charts_for(result, b.chart).items() if k in ("options", "redraws")},
+            })
+        prose = s.prose(results)
+        clean, claims = checks.parse_claims(prose, results=len(narrations))
+        check = _numeric_check(clean, SimpleNamespace(heading=s.heading, intent=s.intent), narrations, claims=claims)
+        uncited = [c.text for c in check.claims if c.cites is None]
+        if uncited or check.findings:
+            raise AssertionError(f"{rep.id} / {s.heading}: uncited {uncited}, unsupported "
+                                 f"{[f.model_dump(mode='json') for f in check.findings]}")
+        sections.append({
+            "heading": s.heading, "intent": s.intent, "kind": "NORMAL", "blocks": blocks, "prose": clean,
+            "numeric_check": check.model_dump(mode="json"),
+            "claims": [c.model_dump(mode="json") for c in check.claims],
+        })
+        written.append(clean)
+        all_results.append(results)
+
+    summary = rep.summary(written, all_results)
+    summary_check = checks.check_prose(summary, checks.figures_in(" ".join(written)), context=rep.summary_intent)
+    if summary_check.findings:
+        raise AssertionError(f"{rep.id} / summary: unsupported "
+                             f"{[f.model_dump(mode='json') for f in summary_check.findings]}")
+    return {
+        "id": rep.id, "connection": rep.connection, "name": rep.name, "description": rep.description,
+        "prompt": rep.prompt, "language": detect(rep.prompt), "owner": rep.owner, "privileges": rep.privileges,
+        "days_old": rep.days_old, "run_days_ago": rep.run_days_ago,
+        "summary": {"heading": "خلاصهٔ مدیریتی" if detect(rep.prompt) == "fa" else "Executive summary",
+                    "intent": rep.summary_intent, "prose": summary,
+                    "numeric_check": summary_check.model_dump(mode="json")},
+        "sections": sections,
+    }
+
+
+# ── the knowledge store ────────────────────────────────────────────────────
+def taught(t: Any, snapshot: dict[str, Any], dialect: str) -> tuple[Any, dict[str, Any]]:
+    """One template through `validate_template` — the guard's fifth entry point
+    — against the synced snapshot, as saving it in the editor would."""
+    from app.knowledge.models import KnowledgeTemplate, TemplateParam
+    from app.knowledge.normalize import normalize_question
+    from app.knowledge.validate import policy_from_tables, validate_template
+
+    template = KnowledgeTemplate(
+        question=t.question, question_normalized=normalize_question(t.question), sql=t.sql,
+        params=[TemplateParam(**p) for p in t.params], note=t.note, source=t.source, role=t.role,
+        schema_version=SNAPSHOT_VERSION,
+    )
+    verdict = validate_template(template, policy_from_tables(snapshot["tables"], dialect=dialect, max_rows=MAX_ROWS))
+    if not verdict.valid:
+        raise AssertionError(f"template {t.id}: {verdict.message}")
+    template = template.model_copy(update={"referenced_tables": sorted(verdict.referenced_tables)})
+    record = {
+        **template.model_dump(mode="json", include={
+            "question", "question_normalized", "sql", "params", "note", "source", "literal_provenance",
+            "role", "status", "status_reason", "schema_version", "referenced_tables",
+        }),
+        "id": t.id, "connection": t.connection, "author": t.author, "hit_count": t.hit_count,
+        "last_hit_days": t.last_hit_days, "created_days": t.created_days, "verified_days": t.verified_days,
+    }
+    return template, record
+
+
+def best_match(question: str, store: list[Any]) -> tuple[float, Any]:
+    """What `LexicalMatcher.match` would rank first: the pg_trgm shortlist at
+    `SHORTLIST_FLOOR`, each candidate scored by `score_against`."""
+    from app.knowledge.matcher import SHORTLIST_FLOOR, score_against, trigram_similarity
+    from app.knowledge.normalize import normalize_question
+
+    asked = normalize_question(question)
+    shortlist = [t for t in store if t.is_matchable
+                 and trigram_similarity(asked, t.question_normalized) >= SHORTLIST_FLOOR]
+    scored = sorted(((score_against(asked, t), t) for t in shortlist), key=lambda s: s[0], reverse=True)
+    return scored[0] if scored else (0.0, None)
+
+
+async def run_verified(
+    v: Any, store: dict[str, Any], snapshot: dict[str, Any], dialect: str, conn: Any, today: date,
+) -> dict[str, Any]:
+    """A chat question the store answers, the way the `match` node answers it:
+    the best candidate over the short-circuit threshold, every slot bound by
+    the binder from the question's own words, the bound statement guarded."""
+    from app.knowledge.bind import bind_params, bind_sql
+    from app.knowledge.matcher import SHORT_CIRCUIT_THRESHOLD
+
+    score, template = best_match(v.text, list(store.values()))
+    if template is None or template is not store[v.template] or score < SHORT_CIRCUIT_THRESHOLD:
+        raise AssertionError(f"{v.id}: would not short-circuit to {v.template} (best {score:.2f})")
+    binding = bind_params(v.text, template.params, now=datetime.combine(today, datetime.min.time()))
+    if not binding.bound:
+        raise AssertionError(f"{v.id}: {binding.missing} would not bind")
+    bound = bind_sql(template.sql, binding.values, dialect=dialect)
+    assert bound, f"{v.id}: the bound statement did not render"
+    q = Q.Question(
+        id=v.id, connection=v.connection, text=v.text, aliases=v.aliases, sql=bound, chart=v.chart,
+        narrative=v.narrative, followups=v.followups,
+        shows="A saved question: the knowledge store answers it, and five nodes are skipped.",
+    )
+    out = await run_question(q, snapshot, dialect, conn, today)
+    out["verified"] = {
+        "template_id": v.template, "question": template.question,
+        "bound_params": {k: str(val) for k, val in binding.values.items()}, "score": round(score, 4),
+    }
+    return out
+
+
+def backlog(
+    connection: str, snapshot: dict[str, Any], store: list[Any], answers: list[dict[str, Any]], boards: list[Any],
+) -> list[dict[str, Any]]:
+    """What to teach next, from the demo's own evidence and the backlog's own words.
+
+    BACKFILL from board tiles a person corrected (`GENERATED_EDITED`), FAILED
+    from a recorded run that needed repairing, TRAFFIC from the questions the
+    sidebar's threads asked, and UNKNOWN_WORDS for a word no table, column or
+    comment uses. How often each was asked is the demo's invented traffic, like
+    the rest of its activity; everything else is derived.
+    """
+    from app.knowledge import backlog as B
+    from app.knowledge.normalize import normalize_question
+
+    known = {t.question_normalized for t in store}
+    items: list[Any] = []
+    for board in boards:
+        if board.connection != connection:
+            continue
+        for position, tile in enumerate(board.tiles):
+            if tile.origin in ("GENERATED_EDITED", "HANDWRITTEN") and tile.question \
+                    and normalize_question(tile.question) not in known:
+                items.append(B.Suggestion(
+                    kind=B.SuggestionKind.BACKFILL, question=tile.question, reason=B.backfill_reason("TILE"),
+                    sql=tile.sql.strip(), source="TILE", model_derived=tile.origin == "GENERATED_EDITED",
+                    origin_id=f"{board.id}#{position}",
+                ))
+    for a in answers:
+        if a["connection"] != connection or not a["attempts"] or "verified" in a:
+            continue
+        asked = Q.TRAFFIC.get(a["id"])
+        if not asked or normalize_question(a["question"]) in known:
+            continue
+        repaired = len(a["attempts"]) - 1
+        kind, reason = (
+            (B.SuggestionKind.FAILED, B.failed_reason(0, asked)) if repaired
+            else (B.SuggestionKind.TRAFFIC, B.traffic_reason(asked))
+        )
+        items.append(B.Suggestion(
+            kind=kind, question=a["question"], count=asked, reason=reason,
+            sql=a["attempts"][-1]["raw_sql"], source="CHAT_CONFIRMED", model_derived=True,
+        ))
+    vocabulary = B.build_vocabulary(snapshot["tables"])
+    for question, count in Q.UNKNOWN.get(connection, []):
+        words = B.unknown_words(question, vocabulary)
+        if not words:
+            raise AssertionError(f"{question!r}: every word is known to {connection}, so it is not a gap")
+        items.append(B.Suggestion(
+            kind=B.SuggestionKind.UNKNOWN_WORDS, question=question, count=count,
+            reason=B.unknown_reason(words), words=words,
+        ))
+    return [
+        {"kind": str(s.kind), "question": s.question, "count": s.count, "reason": s.reason, "sql": s.sql,
+         "source": s.source, "model_derived": s.model_derived, "origin_id": s.origin_id, "words": s.words}
+        for s in B.rank_suggestions(items)
+    ]
+
+
 # ── one deep analysis ──────────────────────────────────────────────────────
 async def run_deep(
     q: Q.DeepQuestion, snapshot: dict[str, Any], dialect: str, policy_name: str, conn: Any, today: date,
@@ -561,6 +848,13 @@ async def main() -> None:
     sections: dict[str, dict[str, Any]] = {}
     answers: list[dict[str, Any]] = []
     deeps: list[dict[str, Any]] = []
+    boards: list[dict[str, Any]] = []
+    reports: list[dict[str, Any]] = []
+    templates: list[dict[str, Any]] = []
+    verified: list[dict[str, Any]] = []
+    suggestions: dict[str, list[dict[str, Any]]] = {}
+    match_best: dict[str, float] = {}
+    from app.knowledge.matcher import SHORT_CIRCUIT_THRESHOLD
     for name, spec in CONNECTIONS.items():
         conn = connector(name, *endpoints[name])
         try:
@@ -581,11 +875,34 @@ async def main() -> None:
                 traced = last["answers"][-1]["traceable"]
                 print(f"  ✓ {d.id:22} steps={len(d.steps)}  revised={len(last['revisions'])}  "
                       f"traceable={'—' if traced is None else f'{traced:.0%}'}")
+
+            store: dict[str, Any] = {}
+            for t in [t for t in K.TEMPLATES if t.connection == name]:
+                store[t.id], record = taught(t, snapshots[name], spec["dialect"])
+                templates.append(record)
+            print(f"  ✓ {len(store)} templates pass validate_template")
+            for v in [v for v in K.VERIFIED if v.connection == name]:
+                verified.append(await run_verified(v, store, snapshots[name], spec["dialect"], conn, today))
+                print(f"  ✓ {v.id:22} answered from {v.template} ({verified[-1]['verified']['score']:.2f})")
+            # Every other recorded question's `match` step says how close the
+            # store came; one that would have matched makes its run a lie.
+            for a in [a for a in answers if a["connection"] == name and a["intent"] == "ANALYTICAL"]:
+                score, near = best_match(a["question"], list(store.values()))
+                if score >= SHORT_CIRCUIT_THRESHOLD:
+                    raise AssertionError(f"{a['id']} would be answered by {near.question!r} ({score:.2f})")
+                match_best[a["id"]] = round(score, 2)
+            for b in [b for b in D.BOARDS if b.connection == name]:
+                boards.append(await run_board(b, snapshots[name], spec["dialect"], conn, today))
+                print(f"  ✓ board {b.id:22} {len(b.tiles)} tiles")
+            for r in [r for r in R.REPORTS if r.connection == name]:
+                reports.append(await run_report(r, snapshots[name], spec["dialect"], spec["policy"], conn, today))
+                print(f"  ✓ report {r.id:22} {len(r.sections)} sections, every claim checked")
+            suggestions[name] = backlog(name, snapshots[name], list(store.values()), answers, D.BOARDS)
         finally:
             await conn.close()
 
-    ids = {a["id"] for a in answers} | {d["id"] for d in deeps}
-    for a in [*answers, *deeps]:
+    ids = {a["id"] for a in answers} | {d["id"] for d in deeps} | {v["id"] for v in verified}
+    for a in [*answers, *deeps, *verified]:
         missing = [f for f in a["followups"] if f not in ids]
         assert not missing, f"{a['id']} suggests unknown questions {missing}"
     assert all(g in ids for g in Q.GUIDE) and all(h in ids for h, *_ in Q.HISTORY)
@@ -618,6 +935,29 @@ async def main() -> None:
         f"export const BUILT_FOR = '{today.isoformat()}'\n\n"
         "/** Every scripted deep analysis, from a real run of each step's statement. */\n"
         f"export const DEEP: ScriptedDeep[] = {_json(deeps)}\n"
+    ))
+    write("dashboards.generated.ts", (
+        "import type { ScriptedBoard } from '../script-types'\n\n"
+        "/** The demo's dashboards, every tile run as a refresh runs it. */\n"
+        f"export const BOARDS: ScriptedBoard[] = {_json(boards)}\n"
+    ))
+    write("reports.generated.ts", (
+        "import type { ScriptedReport } from '../script-types'\n\n"
+        "/** The demo's reports: every block run, every paragraph checked as the worker checks it. */\n"
+        f"export const REPORTS: ScriptedReport[] = {_json(reports)}\n"
+    ))
+    write("knowledge.generated.ts", (
+        "import type { Suggestion } from '../../../src/api/types'\n"
+        "import type { ScriptedAnswer, ScriptedTemplate } from '../script-types'\n\n"
+        "/** The saved questions on each connection, as `validate_template` accepted them. */\n"
+        f"export const TEMPLATES: ScriptedTemplate[] = {_json(templates)}\n\n"
+        "/** Chat questions the store answers: the template's SQL, bound from the question and run. */\n"
+        f"export const VERIFIED: (ScriptedAnswer & {{ verified: {{ template_id: string; question: string; "
+        f"bound_params: Record<string, string>; score: number }} }})[] = {_json(verified)}\n\n"
+        "/** How close the store came to every other recorded question — its `match` step's best score. */\n"
+        f"export const MATCH_BEST: Record<string, number> = {_json(match_best)}\n\n"
+        "/** What to teach next, per connection, ranked by `rank_suggestions`. */\n"
+        f"export const SUGGESTIONS: Record<'sales' | 'sakila', Suggestion[]> = {_json(suggestions)}\n"
     ))
     write("catalog.generated.ts", (
         "import type { CapabilityEntry, ParameterCatalog } from '../../../src/api/types'\n\n"

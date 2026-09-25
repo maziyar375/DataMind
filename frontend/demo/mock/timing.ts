@@ -14,8 +14,10 @@
 export const STEP_MS = {
   /** One short classification call. */
   route: 640,
-  /** A trigram lookup against an empty knowledge store. */
+  /** A trigram lookup against the knowledge store that finds nothing close enough. */
   match: 36,
+  /** A lookup that hits: the candidate's slots bound from the question, then re-guarded. */
+  matchHit: 64,
   /** No sections on either connection: skipped, and hidden from the trail. */
   scope: 2,
   /** Rendering the snapshot; both schemas fit the budget whole. */

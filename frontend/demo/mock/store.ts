@@ -15,11 +15,12 @@ import type {
 import { demoIso, demoNow, daysAgo } from './clock'
 import { ANSWERS, BUILT_FOR, HISTORY } from './fixtures/answers.generated'
 import { DEEP } from './fixtures/deep.generated'
+import { VERIFIED } from './fixtures/knowledge.generated'
 import { DEMO_TODAY } from './fixtures/today'
 import { CONNECTIONS, IDS, LLM_CONFIGS } from './fixtures/world'
 import type { ScriptedAnswer, ScriptedChart, ScriptedDeep } from './script-types'
 import {
-  scriptDeep, scriptFallback, scriptRun, stepsAt, type DeepTimeline, type Timeline,
+  scriptDeep, scriptFallback, scriptRun, stepsAt, type DeepTimeline, type Timeline, type VerifiedAnswer,
 } from './stream'
 
 export interface StoredTurn {
@@ -69,7 +70,8 @@ interface State {
 
 const KEY = 'datamind-demo:session:v1'
 
-export const ANSWERS_BY_ID = new Map(ANSWERS.map((a) => [a.id, a]))
+/** Every recorded quick answer, including the two the knowledge store gives. */
+export const ANSWERS_BY_ID = new Map<string, ScriptedAnswer>([...ANSWERS, ...VERIFIED].map((a) => [a.id, a]))
 export const DEEP_BY_ID = new Map(DEEP.map((d) => [d.id, d]))
 
 /** Deep analyses already in the sidebar: (id, days before DEMO_TODAY, hour). */
@@ -275,6 +277,23 @@ function queriesUpTo(attempts: ScriptedAnswer['attempts'], timeline: Timeline, e
 }
 
 function knowledgeOf(run: StoredRun): RunKnowledge {
+  const answer = answerOf(run)
+  if (answer && 'verified' in answer) {
+    // Answered from a saved question: the badge names it, with what was bound.
+    const { verified } = answer as VerifiedAnswer
+    return {
+      tier: 'VERIFIED',
+      template_id: verified.template_id,
+      question: verified.question,
+      bound_params: verified.bound_params,
+      score: verified.score,
+      matcher: 'LEXICAL',
+      overridden: run.overridden,
+      feedback: run.feedback,
+      metrics_used: [],
+      metrics_version: null,
+    }
+  }
   return {
     tier: 'GENERATED',
     template_id: null,
