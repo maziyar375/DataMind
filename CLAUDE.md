@@ -861,7 +861,7 @@ at commit time and shows up as drift a release later. Full tour:
   a suite into a thing that cannot run.**
 - **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.
   SQL is always `dir="ltr"`, in both themes and both directions — a
-  bidi-reordered statement is unreadable and, worse, ambiguous.
+  bidi-reordered statement is unreadable and, worse, ambiguous. So is a chart.
 - **Status is never colour alone**: every state carries a glyph and a word, so
   the screen survives greyscale and the print stylesheet.
 

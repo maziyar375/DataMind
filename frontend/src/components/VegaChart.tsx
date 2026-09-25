@@ -513,6 +513,11 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
   return (
     <div
       className={frameless ? undefined : 'rm-chart-frame'}
+      // A chart is drawn left to right whatever the text around it, for the
+      // reason SQL is: SVG text inherits `direction`, and inside a Persian
+      // report an end-anchored axis label flips to run into the plot instead
+      // of away from it — "North America" became "N" behind its own bar.
+      dir="ltr"
       style={{
         width: '100%',
         // In fill mode the box's height comes from the parent, and the inner

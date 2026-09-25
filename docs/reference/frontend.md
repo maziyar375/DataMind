@@ -423,7 +423,9 @@ above.
   server then rejects is the worst interaction in the product.
 - **Text a person wrote gets `dir={dirOf(value)}`.** SQL is always `dir="ltr"`,
   in both themes and both directions — a bidi-reordered statement is unreadable
-  and, worse, ambiguous.
+  and, worse, ambiguous. So is a chart (`VegaChart` sets it on its frame): SVG
+  text inherits `direction`, and inside a Persian report an end-anchored axis
+  label runs into the plot instead of away from it.
 - **A credential is testable before it is saved.** Both master–detail pages
   probe the *form* while it is dirty and persist nothing, so nobody has to
   leave a broken row behind to find out it is broken.
