@@ -23,7 +23,7 @@ const id = (group: number, n: number) =>
 export const IDS = {
   users: {
     mazbar: id(1, 1), priya: id(1, 2), tomas: id(1, 3), leila: id(1, 4),
-    chen: id(1, 5), olivia: id(1, 6), marcus: id(1, 7), hannah: id(1, 8), jonas: id(1, 9),
+    chen: id(1, 5), olivia: id(1, 6), marcus: id(1, 7),
   },
   service: { digest: id(2, 1) },
   roles: {
@@ -124,8 +124,6 @@ const PEOPLE: Person[] = [
   { key: 'chen', name: 'Chen Wei', email: 'chen.wei@lumen-supply.example', status: 'ACTIVE', roles: ['normal'], teams: ['finance'], joined: 198 },
   { key: 'olivia', name: 'Olivia Bennett', email: 'olivia.bennett@lumen-supply.example', status: 'ACTIVE', roles: ['viewer'], teams: ['finance'], joined: 120 },
   { key: 'marcus', name: 'Marcus Johnson', email: 'marcus.johnson@lumen-supply.example', status: 'ACTIVE', roles: ['auditor'], teams: [], joined: 96 },
-  { key: 'hannah', name: 'Hannah Schmidt', email: 'hannah.schmidt@lumen-supply.example', status: 'DISABLED', roles: ['normal'], teams: ['revops'], joined: 350 },
-  { key: 'jonas', name: 'Jonas Berg', email: 'jonas.berg@lumen-supply.example', status: 'INVITED', roles: ['normal'], teams: [], joined: 2 },
 ]
 
 const TEAM_DEFS: { key: keyof typeof IDS.teams; name: string; description: string; roles: (keyof typeof IDS.roles)[] }[] = [

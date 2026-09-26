@@ -35,14 +35,12 @@ export interface Operation {
 }
 
 /** Who asks, how often on a working day, and which model they reach for. */
-const ASKERS: { id: string; name: string; perDay: number; sonnet: number; until?: number }[] = [
+const ASKERS: { id: string; name: string; perDay: number; sonnet: number }[] = [
   { id: IDS.users.mazbar, name: 'Mazbar Azami', perDay: 7.5, sonnet: 0.8 },
   { id: IDS.users.priya, name: 'Priya Nair', perDay: 5.2, sonnet: 0.55 },
   { id: IDS.users.tomas, name: 'Tomás Álvarez', perDay: 4.1, sonnet: 0.7 },
   { id: IDS.users.leila, name: 'Leila Karimi', perDay: 2.6, sonnet: 0.9 },
   { id: IDS.users.chen, name: 'Chen Wei', perDay: 3.3, sonnet: 0.35 },
-  // Disabled five weeks ago; her history stays.
-  { id: IDS.users.hannah, name: 'Hannah Schmidt', perDay: 1.8, sonnet: 0.5, until: 36 },
 ]
 
 const HISTORY_DAYS = 120
@@ -59,7 +57,6 @@ function generate(): Operation[] {
     // Month-end close: finance asks more in the last days of a month.
     const monthEnd = date.getUTCDate() >= 26
     for (const asker of ASKERS) {
-      if (asker.until !== undefined && day < asker.until) continue
       const rate = asker.perDay * (weekend ? 0.12 : 1) * (monthEnd && asker.id === IDS.users.chen ? 2.2 : 1)
       let n = Math.floor(rate)
       if (random() < rate - n) n += 1
@@ -225,8 +222,6 @@ export const AUDIT: AuditEntry[] = ([
   [4.0, 'Marcus Johnson', 'access.denied', 'connection', IDS.connections.sales, 'DENIED', { needed: 'select' }],
   [5.6, 'Mazbar Azami', 'team.member.added', 'team', IDS.teams.revops, 'SUCCESS', { user_id: IDS.users.tomas }],
   [6.2, 'Priya Nair', 'llm_config.endpoint.changed', 'llm_config', IDS.llm.gpt, 'SUCCESS', { field: 'base_url' }],
-  [8.8, 'Mazbar Azami', 'grant.revoked', 'connection', IDS.connections.sales, 'SUCCESS', { privilege: 'select', user_id: IDS.users.hannah }],
-  [9.0, 'Mazbar Azami', 'user.manage', 'user', IDS.users.hannah, 'SUCCESS', { status: 'DISABLED' }],
   [12.5, 'Mazbar Azami', 'service_user.created', 'user', IDS.service.digest, 'SUCCESS', { roles: 1 }],
   [14.1, 'Tomás Álvarez', 'ownership.transferred', 'dashboard', null, 'SUCCESS', { to: IDS.users.chen }],
   [19.7, 'Mazbar Azami', 'team.created', 'team', IDS.teams.revops, 'SUCCESS', {}],
