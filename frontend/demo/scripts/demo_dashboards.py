@@ -82,11 +82,14 @@ VIEWER = ["describe", "select"]
 
 
 # ── Sales warehouse ────────────────────────────────────────────────────────
+# The same page as the product's own `scripts/seed_demo_dashboard.py` — a
+# headline strip, then sections a line of prose introduces, and every chart
+# family the platform draws — over the demo warehouse, whose data has a shape.
 COMMERCIAL = Board(
     id="commercial-overview",
     connection="sales",
     name="Commercial overview",
-    description="Revenue, customers and fulfilment.",
+    description="Revenue, mix, margin and service.",
     owner="Mazbar Azami",
     privileges=OWNER,
     refresh_seconds=900,
@@ -113,26 +116,19 @@ WHERE {BOOKED}
   AND {LAST_12}
 GROUP BY 1
 ORDER BY 1""", question="Orders per month over the last 12 months"),
-        Tile("Average order value", "METRIC", 8, 0, 4, 3, sql=f"""
+        Tile("Gross margin", "METRIC", 8, 0, 4, 3, sql=f"""
 SELECT date_trunc('month', o.order_date)::date AS month,
-       ROUND(AVG(o.total_amount), 2) AS "average order"
+       ROUND(100 * SUM(oi.line_total - oi.quantity * p.cost) / SUM(oi.line_total), 1) AS "gross margin %"
 FROM public.orders AS o
+JOIN public.order_items AS oi ON oi.order_id = o.id
+JOIN public.products AS p ON p.id = oi.product_id
 WHERE {BOOKED}
   AND {LAST_12}
 GROUP BY 1
-ORDER BY 1""", question="Average order value per month"),
-        Tile("New customers", "METRIC", 7, 27, 5, 3, sql="""
-SELECT date_trunc('month', c.signed_up_at)::date AS month,
-       COUNT(*) AS "signed up this month"
-FROM public.customers AS c
-WHERE NOT c.is_deleted
-  AND c.signed_up_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '12 months'
-  AND c.signed_up_at < date_trunc('month', CURRENT_DATE)
-GROUP BY 1
-ORDER BY 1""", question="New customers per month"),
+ORDER BY 1""", question="Gross margin per month: revenue less the cost of what was sold"),
 
         # ── revenue over time, and where it comes from
-        Tile("Revenue by month", "CHART", 0, 3, 8, 7, sql=f"""
+        Tile("Revenue by month", "CHART", 0, 3, 8, 8, sql=f"""
 SELECT date_trunc('month', o.order_date)::date AS month,
        ROUND(SUM(o.total_amount), 2) AS revenue
 FROM public.orders AS o
@@ -143,7 +139,7 @@ GROUP BY 1
 ORDER BY 1""", question="Revenue by month since the warehouse's first full month",
              chart={"chart_type": "area", "x_axis": axis("month", "temporal", "Month"),
                     "y_axis": measure("revenue", "Revenue")}),
-        Tile("Channel mix", "CHART", 8, 3, 4, 7, sql=f"""
+        Tile("Channel mix", "CHART", 8, 3, 4, 8, sql=f"""
 SELECT o.channel,
        ROUND(SUM(o.total_amount), 2) AS revenue
 FROM public.orders AS o
@@ -152,60 +148,40 @@ WHERE {BOOKED}
 GROUP BY o.channel
 ORDER BY revenue DESC""", question="Revenue by sales channel over the last 12 months",
              chart={"chart_type": "pie", "x_axis": axis("channel", "nominal"), "y_axis": measure("revenue")}),
-        Tile("Revenue by region", "CHART", 0, 10, 6, 7, sql=f"""
+        Tile("Top brands by revenue", "CHART", 0, 11, 6, 7, sql=f"""
+SELECT b.name AS brand,
+       ROUND(SUM(oi.line_total), 2) AS revenue
+FROM public.orders AS o
+JOIN public.order_items AS oi ON oi.order_id = o.id
+JOIN public.products AS p ON p.id = oi.product_id
+JOIN public.brands AS b ON b.id = p.brand_id
+WHERE {BOOKED}
+  AND {LAST_12}
+GROUP BY b.name
+ORDER BY revenue DESC""", question="Which brands brought in the most revenue over the last 12 months?",
+             chart={"chart_type": "bar", "orientation": "horizontal", "x_axis": axis("brand", "nominal", "Brand"),
+                    "y_axis": measure("revenue", "Revenue")}),
+        Tile("Revenue by region and segment", "CHART", 6, 11, 6, 7, sql=f"""
 SELECT r.name AS region,
+       c.segment,
        ROUND(SUM(o.total_amount), 2) AS revenue
 FROM public.orders AS o
 JOIN public.customers AS c ON c.id = o.customer_id
 JOIN public.regions AS r ON r.id = c.region_id
 WHERE {BOOKED}
   AND {LAST_12}
-GROUP BY r.name
-ORDER BY revenue DESC""", question="Revenue by customer region over the last 12 months",
-             chart={"chart_type": "bar", "orientation": "horizontal",
-                    "x_axis": axis("region", "nominal", "Region"), "y_axis": measure("revenue", "Revenue")}),
-        Tile("Category mix by segment", "CHART", 6, 10, 6, 7, sql=f"""
-SELECT cat.name AS category,
-       c.segment,
-       ROUND(SUM(oi.line_total), 2) AS revenue
-FROM public.orders AS o
-JOIN public.order_items AS oi ON oi.order_id = o.id
-JOIN public.products AS p ON p.id = oi.product_id
-JOIN public.categories AS cat ON cat.id = p.category_id
-JOIN public.customers AS c ON c.id = o.customer_id
-WHERE {BOOKED}
-  AND {LAST_12}
-GROUP BY cat.name, c.segment
-ORDER BY revenue DESC""", question="Revenue by product category and customer segment",
+GROUP BY r.name, c.segment
+ORDER BY revenue DESC""", question="Revenue by customer region and segment over the last 12 months",
              chart={"chart_type": "bar", "stack": "stacked",
-                    "x_axis": axis("category", "nominal", "Category"), "y_axis": measure("revenue", "Revenue"),
+                    "x_axis": axis("region", "nominal", "Region"), "y_axis": measure("revenue", "Revenue"),
                     "series": axis("segment", "nominal")}),
 
-        # ── products and customers
-        Tile("Products and customers", "TEXT", 0, 17, 12, 2, question=(
-            "What sells, and who buys it: products for this year, customers and returns for the last "
-            "twelve months. An order counts once it is completed or shipped, never while cancelled or returned.")),
-        Tile("Top products this year", "TABLE", 0, 19, 7, 8, sql=f"""
-SELECT p.name AS product,
-       cat.name AS category,
-       SUM(oi.quantity) AS units,
-       ROUND(SUM(oi.line_total), 2) AS revenue,
-       ROUND(AVG(oi.unit_price), 2) AS avg_price
-FROM public.orders AS o
-JOIN public.order_items AS oi ON oi.order_id = o.id
-JOIN public.products AS p ON p.id = oi.product_id
-JOIN public.categories AS cat ON cat.id = p.category_id
-WHERE {BOOKED}
-  AND o.order_date >= date_trunc('year', CURRENT_DATE)
-GROUP BY p.name, cat.name
-ORDER BY revenue DESC
-LIMIT 10""", question="Top 10 products by revenue this year",
-             table={"columns": [col("product", "Product"), col("category", "Category"),
-                                col("units", "Units", "integer", "right"),
-                                col("revenue", "Revenue", "decimal", "right"),
-                                col("avg_price", "Avg price", "decimal", "right")],
-                    "sort_column": "revenue", "sort_direction": "desc"}),
-        Tile("Revenue by segment", "CHART", 7, 19, 5, 8, sql=f"""
+        # ── mix, margin and price
+        Tile("Mix, margin and price", "TEXT", 0, 18, 12, 2, question=(
+            "Where the revenue comes from and what it earns: each segment month by month, each category "
+            "month by month, what a product sells for against how many sell, and how much of a sale is "
+            "margin. Revenue means completed and shipped orders, never cancelled or returned.")),
+        Tile("Revenue by segment", "CHART", 0, 20, 6, 7, sql=f"""
 SELECT date_trunc('month', o.order_date)::date AS month,
        c.segment,
        ROUND(SUM(o.total_amount), 2) AS revenue
@@ -215,29 +191,114 @@ WHERE {BOOKED}
   AND {LAST_12}
 GROUP BY 1, 2
 ORDER BY 1, 2""", question="Monthly revenue by customer segment",
-             chart={"chart_type": "line", "x_axis": axis("month", "temporal", "Month"),
+             chart={"chart_type": "area", "stack": "stacked", "x_axis": axis("month", "temporal", "Month"),
                     "y_axis": measure("revenue", "Revenue"), "series": axis("segment", "nominal")}),
-        Tile("Largest customers", "TABLE", 0, 27, 7, 7, sql=f"""
-SELECT c.name AS customer,
-       c.segment,
-       r.name AS region,
-       COUNT(*) AS orders,
-       ROUND(SUM(o.total_amount), 2) AS revenue
+        # Month as text: a heatmap's axes are categories, and 'YYYY-MM' sorts
+        # the way a calendar does. The June cell is Meridian's fleet refresh.
+        Tile("Revenue by category and month", "CHART", 6, 20, 6, 7, sql=f"""
+SELECT to_char(o.order_date, 'YYYY-MM') AS month,
+       cat.name AS category,
+       ROUND(SUM(oi.line_total), 2) AS revenue
 FROM public.orders AS o
-JOIN public.customers AS c ON c.id = o.customer_id
-JOIN public.regions AS r ON r.id = c.region_id
+JOIN public.order_items AS oi ON oi.order_id = o.id
+JOIN public.products AS p ON p.id = oi.product_id
+JOIN public.categories AS cat ON cat.id = p.category_id
 WHERE {BOOKED}
   AND {LAST_12}
-GROUP BY c.name, c.segment, r.name
-ORDER BY revenue DESC
-LIMIT 8""", origin="GENERATED_EDITED", question="Our eight largest customers over the last 12 months",
-             table={"columns": [col("customer", "Customer"), col("segment", "Segment"), col("region", "Region"),
-                                col("orders", "Orders", "integer", "right"),
-                                col("revenue", "Revenue", "decimal", "right")],
-                    "sort_column": "revenue", "sort_direction": "desc"}),
+GROUP BY 1, 2
+ORDER BY 1, 2""", question="Revenue by product category, month by month",
+             chart={"chart_type": "heatmap", "x_axis": axis("month", "nominal", "Month"),
+                    "y_axis": axis("category", "nominal", "Category"), "color": measure("revenue", "Revenue")}),
+        # A combo draws bars, and bars on a real date scale are hairlines, so
+        # the month is text here too.
+        Tile("Revenue against average order", "CHART", 0, 27, 6, 7, sql=f"""
+SELECT to_char(o.order_date, 'YYYY-MM') AS month,
+       ROUND(SUM(o.total_amount), 2) AS revenue,
+       ROUND(AVG(o.total_amount), 2) AS avg_order
+FROM public.orders AS o
+WHERE {BOOKED}
+  AND {LAST_12}
+GROUP BY 1
+ORDER BY 1""", question="Monthly revenue against the average order value",
+             chart={"chart_type": "combo", "x_axis": axis("month", "nominal", "Month"),
+                    "y_axis": measure("revenue", "Revenue"), "y2_axis": measure("avg_order", "Avg order")}),
+        Tile("Price against volume", "CHART", 6, 27, 6, 7, sql=f"""
+SELECT p.name AS product,
+       cat.name AS category,
+       p.price,
+       SUM(oi.quantity) AS units,
+       ROUND(SUM(oi.line_total), 2) AS revenue
+FROM public.orders AS o
+JOIN public.order_items AS oi ON oi.order_id = o.id
+JOIN public.products AS p ON p.id = oi.product_id
+JOIN public.categories AS cat ON cat.id = p.category_id
+WHERE {BOOKED}
+  AND {LAST_12}
+GROUP BY p.name, cat.name, p.price
+ORDER BY revenue DESC""", question="Each product's price against the units it sold over the last 12 months",
+             chart={"chart_type": "scatter", "x_axis": axis("price", "quantitative", "Unit price"),
+                    "y_axis": axis("units", "quantitative", "Units sold"), "series": axis("category", "nominal"),
+                    "size": axis("revenue", "quantitative")}),
+        Tile("Gross margin by category", "CHART", 0, 34, 6, 7, sql=f"""
+SELECT cat.name AS category,
+       ROUND(100 * SUM(oi.line_total - oi.quantity * p.cost) / SUM(oi.line_total), 1) AS margin_pct
+FROM public.orders AS o
+JOIN public.order_items AS oi ON oi.order_id = o.id
+JOIN public.products AS p ON p.id = oi.product_id
+JOIN public.categories AS cat ON cat.id = p.category_id
+WHERE {BOOKED}
+  AND {LAST_12}
+GROUP BY cat.name
+ORDER BY margin_pct DESC""", question="Gross margin by product category over the last 12 months",
+             chart={"chart_type": "bar", "x_axis": axis("category", "nominal", "Category"),
+                    "y_axis": measure("margin_pct", "Gross margin %")}),
+        # One month, under 3,000: a histogram bins the rows it is given, so a
+        # year of orders would be cut at the row limit, and the handful of
+        # fleet-sized orders would squeeze everyone else into the first bin.
+        # The channel is not drawn, but a one-column result is never charted.
+        Tile("Order size last month", "CHART", 6, 34, 6, 7, sql=f"""
+SELECT o.channel,
+       o.total_amount AS "order value"
+FROM public.orders AS o
+WHERE {BOOKED}
+  AND o.order_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
+  AND o.order_date < date_trunc('month', CURRENT_DATE)
+  AND o.total_amount < 3000""", question="How were last month's orders spread by value, up to 3,000?",
+             chart={"chart_type": "histogram", "x_axis": axis("order value", "quantitative", "Order value")}),
+
+        # ── customers and service
+        Tile("Customers and service", "TEXT", 0, 41, 12, 2, question=(
+            "Who is arriving and what happens after the order: new customers each month, the share of "
+            "orders sent back and why, how long a delivery takes door to door, and what the support queue "
+            "looked like while it did.")),
+        Tile("New customers", "METRIC", 0, 43, 4, 3, sql="""
+SELECT date_trunc('month', c.signed_up_at)::date AS month,
+       COUNT(*) AS "signed up this month"
+FROM public.customers AS c
+WHERE NOT c.is_deleted
+  AND c.signed_up_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '12 months'
+  AND c.signed_up_at < date_trunc('month', CURRENT_DATE)
+GROUP BY 1
+ORDER BY 1""", question="New customers per month"),
+        Tile("Return rate", "METRIC", 4, 43, 4, 3, sql=f"""
+SELECT date_trunc('month', o.order_date)::date AS month,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE o.status = 'returned') / COUNT(*), 2) AS "returned %"
+FROM public.orders AS o
+WHERE {LAST_12}
+GROUP BY 1
+ORDER BY 1""", question="What share of each month's orders was returned?"),
+        Tile("Days to deliver", "METRIC", 8, 43, 4, 3, sql="""
+SELECT date_trunc('month', s.shipped_at)::date AS month,
+       ROUND(AVG(s.delivered_at::date - s.shipped_at::date), 2) AS "days in transit"
+FROM public.shipments AS s
+WHERE s.delivered_at IS NOT NULL
+  AND s.shipped_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '12 months'
+  AND s.shipped_at < date_trunc('month', CURRENT_DATE)
+GROUP BY 1
+ORDER BY 1""", question="Average days from shipping to delivery, per month"),
         # Why things come back — a split that genuinely varies, where the
         # average review rating is ~4.1 in every category and draws a flat wall.
-        Tile("Returns by reason", "CHART", 7, 30, 5, 4, sql="""
+        Tile("Returns by reason", "CHART", 0, 46, 6, 7, sql="""
 SELECT rt.reason,
        COUNT(*) AS returns
 FROM public.returns AS rt
@@ -246,40 +307,118 @@ GROUP BY rt.reason
 ORDER BY returns DESC""", origin="GENERATED_EDITED", question="Why were items returned over the last 12 months?",
              chart={"chart_type": "bar", "orientation": "horizontal", "x_axis": axis("reason", "nominal", "Reason"),
                     "y_axis": measure("returns", "Returns")}),
+        # A line on a real date: bars on a text month would be ranked by
+        # their count, and bars on a date scale are hairlines.
+        Tile("Tickets opened by month", "CHART", 6, 46, 6, 7, sql="""
+SELECT date_trunc('month', t.opened_at)::date AS month,
+       t.priority,
+       COUNT(*) AS tickets
+FROM public.support_tickets AS t
+WHERE t.opened_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '12 months'
+  AND t.opened_at < date_trunc('month', CURRENT_DATE)
+GROUP BY 1, 2
+ORDER BY 1, 2""", question="Support tickets opened each month, by priority",
+             chart={"chart_type": "line", "x_axis": axis("month", "temporal", "Month"),
+                    "y_axis": measure("tickets", "Tickets"), "series": axis("priority", "nominal")}),
 
-        # ── fulfilment
-        Tile("Fulfilment", "TEXT", 0, 34, 12, 2, question=(
-            "How orders reach customers: how many deliveries each carrier made over the last six months and "
-            "how long they took door to door, and which stock is at or below the level it is reordered at.")),
-        # Every carrier averages about three and a half days, so days alone
-        # would be a flat wall of bars; volume against speed is the picture.
-        Tile("Carriers: volume and speed", "CHART", 0, 36, 5, 7, sql="""
-SELECT ca.name AS carrier,
-       COUNT(*) AS deliveries,
-       ROUND(AVG(EXTRACT(EPOCH FROM (s.delivered_at - s.shipped_at)) / 86400)::numeric, 1) AS avg_days
-FROM public.shipments AS s
-JOIN public.carriers AS ca ON ca.id = s.carrier_id
-WHERE s.delivered_at IS NOT NULL
-  AND s.shipped_at >= CURRENT_DATE - INTERVAL '6 months'
-GROUP BY ca.name
-ORDER BY deliveries DESC""", question="Deliveries and average days from shipping to delivery, by carrier",
-             chart={"chart_type": "combo", "x_axis": axis("carrier", "nominal", "Carrier"),
-                    "y_axis": measure("deliveries", "Deliveries"), "y2_axis": measure("avg_days", "Average days")}),
-        Tile("Stock at or below reorder level", "TABLE", 5, 36, 7, 7, sql="""
+        # ── the detail
+        Tile("The detail behind the numbers", "TEXT", 0, 53, 12, 2, question=(
+            "The rows the charts summarise, each sorted on the column that decides it: the largest "
+            "accounts, this year's best sellers, the latest orders, stock below its reorder level, the "
+            "past year's campaigns and the carriers that deliver it all.")),
+        Tile("Largest customers", "TABLE", 0, 55, 6, 8, sql=f"""
+SELECT c.name AS customer,
+       t.name AS tier,
+       COUNT(*) AS orders,
+       ROUND(SUM(o.total_amount), 2) AS revenue
+FROM public.orders AS o
+JOIN public.customers AS c ON c.id = o.customer_id
+LEFT JOIN public.loyalty_tiers AS t ON t.id = c.loyalty_tier_id
+WHERE {BOOKED}
+  AND {LAST_12}
+GROUP BY c.name, t.name
+ORDER BY revenue DESC
+LIMIT 12""", origin="GENERATED_EDITED", question="Our largest customers over the last 12 months",
+             table={"columns": [col("customer", "Customer"), col("tier", "Loyalty tier"),
+                                col("orders", "Orders", "integer", "right"),
+                                col("revenue", "Revenue", "decimal", "right")],
+                    "sort_column": "revenue", "sort_direction": "desc"}),
+        Tile("Top products this year", "TABLE", 6, 55, 6, 8, sql=f"""
+SELECT p.name AS product,
+       cat.name AS category,
+       SUM(oi.quantity) AS units,
+       ROUND(SUM(oi.line_total), 2) AS revenue
+FROM public.orders AS o
+JOIN public.order_items AS oi ON oi.order_id = o.id
+JOIN public.products AS p ON p.id = oi.product_id
+JOIN public.categories AS cat ON cat.id = p.category_id
+WHERE {BOOKED}
+  AND o.order_date >= date_trunc('year', CURRENT_DATE)
+GROUP BY p.name, cat.name
+ORDER BY revenue DESC
+LIMIT 12""", question="Top products by revenue this year",
+             table={"columns": [col("product", "Product"), col("category", "Category"),
+                                col("units", "Units", "integer", "right"),
+                                col("revenue", "Revenue", "decimal", "right")],
+                    "sort_column": "revenue", "sort_direction": "desc"}),
+        Tile("Latest orders", "TABLE", 0, 63, 6, 8, sql="""
+SELECT o.order_date AS placed,
+       c.name AS customer,
+       o.status,
+       o.total_amount AS total
+FROM public.orders AS o
+JOIN public.customers AS c ON c.id = o.customer_id
+ORDER BY o.placed_at DESC, o.id DESC
+LIMIT 12""", question="The latest orders",
+             table={"columns": [col("placed", "Placed"), col("customer", "Customer"),
+                                col("status", "Status"), col("total", "Total", "decimal", "right")]}),
+        Tile("Below reorder level", "TABLE", 6, 63, 6, 8, sql="""
 SELECT p.name AS product,
        w.name AS warehouse,
        i.quantity AS on_hand,
-       i.reorder_level
+       i.reorder_level - i.quantity AS shortfall
 FROM public.inventory AS i
 JOIN public.products AS p ON p.id = i.product_id
 JOIN public.warehouses AS w ON w.id = i.warehouse_id
-WHERE i.quantity <= i.reorder_level
+WHERE i.quantity < i.reorder_level
   AND p.active
-ORDER BY i.quantity - i.reorder_level, p.name
-LIMIT 12""", question="Which products are at or below their reorder level?",
+ORDER BY shortfall DESC, p.name
+LIMIT 12""", question="Which products are below their reorder level, and by how much?",
              table={"columns": [col("product", "Product"), col("warehouse", "Warehouse"),
-                                col("on_hand", "On hand", "integer", "right"),
-                                col("reorder_level", "Reorder at", "integer", "right")]}),
+                                col("on_hand", "Stock", "integer", "right"),
+                                col("shortfall", "Short", "integer", "right")],
+                    "sort_column": "shortfall", "sort_direction": "desc"}),
+        Tile("Campaign results", "TABLE", 0, 71, 6, 5, sql=f"""
+SELECT pr.name AS campaign,
+       ROUND(pr.discount_pct / 100.0, 4) AS discount,
+       COUNT(*) AS orders,
+       ROUND(SUM(o.total_amount), 2) AS revenue
+FROM public.promotions AS pr
+JOIN public.order_promotions AS op ON op.promotion_id = pr.id
+JOIN public.orders AS o ON o.id = op.order_id
+WHERE {BOOKED}
+  AND pr.ends_on >= CURRENT_DATE - INTERVAL '12 months'
+GROUP BY pr.name, pr.discount_pct, pr.starts_on
+ORDER BY pr.starts_on DESC""", question="How did the past year's campaigns do?",
+             table={"columns": [col("campaign", "Campaign"), col("discount", "Discount", "percent", "right"),
+                                col("orders", "Orders", "integer", "right"),
+                                col("revenue", "Revenue", "decimal", "right")]}),
+        Tile("Carrier performance", "TABLE", 6, 71, 6, 5, sql="""
+SELECT ca.name AS carrier,
+       COUNT(*) AS shipments,
+       ROUND(AVG(s.delivered_at::date - s.shipped_at::date), 2) AS avg_days,
+       ROUND(1.0 * COUNT(*) FILTER (WHERE s.delivered_at IS NOT NULL) / COUNT(*), 4) AS delivered,
+       ROUND(SUM(s.cost), 2) AS cost
+FROM public.shipments AS s
+JOIN public.carriers AS ca ON ca.id = s.carrier_id
+WHERE s.shipped_at >= CURRENT_DATE - INTERVAL '12 months'
+GROUP BY ca.name
+ORDER BY shipments DESC""", question="Shipments, speed and cost by carrier over the last 12 months",
+             table={"columns": [col("carrier", "Carrier"), col("shipments", "Shipments", "integer", "right"),
+                                col("avg_days", "Avg days", "decimal", "right"),
+                                col("delivered", "Delivered", "percent", "right"),
+                                col("cost", "Shipping cost", "decimal", "right")],
+                    "sort_column": "shipments", "sort_direction": "desc"}),
     ],
 )
 

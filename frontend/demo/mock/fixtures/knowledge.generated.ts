@@ -4259,24 +4259,24 @@ export const SUGGESTIONS: Record<'sales' | 'sakila', Suggestion[]> = {
   "sales": [
     {
       "kind": "BACKFILL",
-      "question": "Our eight largest customers over the last 12 months",
-      "count": 1,
-      "reason": "From a dashboard tile you corrected",
-      "sql": "SELECT c.name AS customer,\n       c.segment,\n       r.name AS region,\n       COUNT(*) AS orders,\n       ROUND(SUM(o.total_amount), 2) AS revenue\nFROM public.orders AS o\nJOIN public.customers AS c ON c.id = o.customer_id\nJOIN public.regions AS r ON r.id = c.region_id\nWHERE o.status IN ('completed', 'shipped')\n  AND o.order_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '12 months'\n  AND o.order_date < date_trunc('month', CURRENT_DATE)\nGROUP BY c.name, c.segment, r.name\nORDER BY revenue DESC\nLIMIT 8",
-      "source": "TILE",
-      "model_derived": true,
-      "origin_id": "commercial-overview#11",
-      "words": []
-    },
-    {
-      "kind": "BACKFILL",
       "question": "Why were items returned over the last 12 months?",
       "count": 1,
       "reason": "From a dashboard tile you corrected",
       "sql": "SELECT rt.reason,\n       COUNT(*) AS returns\nFROM public.returns AS rt\nWHERE rt.returned_at >= CURRENT_DATE - INTERVAL '12 months'\nGROUP BY rt.reason\nORDER BY returns DESC",
       "source": "TILE",
       "model_derived": true,
-      "origin_id": "commercial-overview#12",
+      "origin_id": "commercial-overview#18",
+      "words": []
+    },
+    {
+      "kind": "BACKFILL",
+      "question": "Our largest customers over the last 12 months",
+      "count": 1,
+      "reason": "From a dashboard tile you corrected",
+      "sql": "SELECT c.name AS customer,\n       t.name AS tier,\n       COUNT(*) AS orders,\n       ROUND(SUM(o.total_amount), 2) AS revenue\nFROM public.orders AS o\nJOIN public.customers AS c ON c.id = o.customer_id\nLEFT JOIN public.loyalty_tiers AS t ON t.id = c.loyalty_tier_id\nWHERE o.status IN ('completed', 'shipped')\n  AND o.order_date >= date_trunc('month', CURRENT_DATE) - INTERVAL '12 months'\n  AND o.order_date < date_trunc('month', CURRENT_DATE)\nGROUP BY c.name, t.name\nORDER BY revenue DESC\nLIMIT 12",
+      "source": "TILE",
+      "model_derived": true,
+      "origin_id": "commercial-overview#21",
       "words": []
     },
     {

@@ -238,7 +238,12 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
       const config = {
         background: 'transparent',
         view: { stroke: 'transparent' },
-        font: 'inherit',
+        // Named, not `inherit`. Vega sizes every label by measuring it on a
+        // canvas, and a canvas does not understand `inherit`: it measured in
+        // its 10px default while the SVG drew in the app's font, so each label
+        // was given a few pixels less than it took, and a tile — which clips —
+        // cut the last letter off the longest legend entry ("Mid-Marke").
+        font: getComputedStyle(el).fontFamily || 'inherit',
         title: { color: p.text, fontSize: 13, fontWeight: 600, anchor: 'start' as const },
         axis: {
           labelColor: p.dim,
@@ -447,6 +452,10 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
         window.clearTimeout(resizeTimer)
         resizeTimer = null
       }
+      // The labels are measured in the font `buildSpec` names, so it has to
+      // have arrived: until it has, a canvas measures the fallback instead.
+      await document.fonts?.ready
+      if (cancelled) return
 
       const full = buildSpec(
         target.kind === 'print' ? 'light' : theme,

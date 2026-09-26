@@ -9,7 +9,7 @@ export const BOARDS: ScriptedBoard[] = [
     "id": "commercial-overview",
     "connection": "sales",
     "name": "Commercial overview",
-    "description": "Revenue, customers and fulfilment.",
+    "description": "Revenue, mix, margin and service.",
     "owner": "Mazbar Azami",
     "privileges": [
       "describe",
@@ -100,7 +100,7 @@ export const BOARDS: ScriptedBoard[] = [
           ],
           "row_count": 12,
           "truncated": false,
-          "duration_ms": 13,
+          "duration_ms": 42,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
@@ -300,7 +300,7 @@ export const BOARDS: ScriptedBoard[] = [
           ],
           "row_count": 12,
           "truncated": false,
-          "duration_ms": 13,
+          "duration_ms": 28,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
@@ -419,10 +419,10 @@ export const BOARDS: ScriptedBoard[] = [
         }
       },
       {
-        "title": "Average order value",
+        "title": "Gross margin",
         "tile_type": "METRIC",
-        "question": "Average order value per month",
-        "sql": "SELECT CAST(DATE_TRUNC('MONTH', o.order_date) AS DATE) AS month, ROUND(CAST(AVG(o.total_amount) AS DECIMAL), 2) AS \"average order\" FROM public.orders AS o WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY 1 ORDER BY 1 LIMIT 1000",
+        "question": "Gross margin per month: revenue less the cost of what was sold",
+        "sql": "SELECT CAST(DATE_TRUNC('MONTH', o.order_date) AS DATE) AS month, ROUND(100 * SUM(oi.line_total - oi.quantity * p.cost) / SUM(oi.line_total), 1) AS \"gross margin %\" FROM public.orders AS o JOIN public.order_items AS oi ON oi.order_id = o.id JOIN public.products AS p ON p.id = oi.product_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY 1 ORDER BY 1 LIMIT 1000",
         "sql_origin": "GENERATED",
         "chart_config": null,
         "table_config": null,
@@ -440,7 +440,7 @@ export const BOARDS: ScriptedBoard[] = [
               "semantic_type": "temporal"
             },
             {
-              "name": "average order",
+              "name": "gross margin %",
               "db_type": "numeric",
               "semantic_type": "quantitative"
             }
@@ -448,107 +448,107 @@ export const BOARDS: ScriptedBoard[] = [
           "rows": [
             [
               "2025-09-01",
-              798.83
+              46.7
             ],
             [
               "2025-10-01",
-              780.84
+              46.4
             ],
             [
               "2025-11-01",
-              843.11
+              46.5
             ],
             [
               "2025-12-01",
-              827.75
+              46.7
             ],
             [
               "2026-01-01",
-              783.32
+              46.1
             ],
             [
               "2026-02-01",
-              873.79
+              46.6
             ],
             [
               "2026-03-01",
-              827.2
+              46.3
             ],
             [
               "2026-04-01",
-              829.21
+              46.4
             ],
             [
               "2026-05-01",
-              774.98
+              47.1
             ],
             [
               "2026-06-01",
-              1249.3
+              44.2
             ],
             [
               "2026-07-01",
-              757.41
+              46.0
             ],
             [
               "2026-08-01",
-              816.86
+              46.3
             ]
           ],
           "row_count": 12,
           "truncated": false,
-          "duration_ms": 13,
+          "duration_ms": 54,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
               "values": [
                 {
                   "month": "2025-09-01",
-                  "average order": 798.83
+                  "gross margin %": 46.7
                 },
                 {
                   "month": "2025-10-01",
-                  "average order": 780.84
+                  "gross margin %": 46.4
                 },
                 {
                   "month": "2025-11-01",
-                  "average order": 843.11
+                  "gross margin %": 46.5
                 },
                 {
                   "month": "2025-12-01",
-                  "average order": 827.75
+                  "gross margin %": 46.7
                 },
                 {
                   "month": "2026-01-01",
-                  "average order": 783.32
+                  "gross margin %": 46.1
                 },
                 {
                   "month": "2026-02-01",
-                  "average order": 873.79
+                  "gross margin %": 46.6
                 },
                 {
                   "month": "2026-03-01",
-                  "average order": 827.2
+                  "gross margin %": 46.3
                 },
                 {
                   "month": "2026-04-01",
-                  "average order": 829.21
+                  "gross margin %": 46.4
                 },
                 {
                   "month": "2026-05-01",
-                  "average order": 774.98
+                  "gross margin %": 47.1
                 },
                 {
                   "month": "2026-06-01",
-                  "average order": 1249.3
+                  "gross margin %": 44.2
                 },
                 {
                   "month": "2026-07-01",
-                  "average order": 757.41
+                  "gross margin %": 46.0
                 },
                 {
                   "month": "2026-08-01",
-                  "average order": 816.86
+                  "gross margin %": 46.3
                 }
               ]
             },
@@ -561,7 +561,7 @@ export const BOARDS: ScriptedBoard[] = [
                 "type": "temporal"
               },
               "y": {
-                "field": "average order",
+                "field": "gross margin %",
                 "type": "quantitative"
               },
               "tooltip": [
@@ -570,7 +570,7 @@ export const BOARDS: ScriptedBoard[] = [
                   "type": "temporal"
                 },
                 {
-                  "field": "average order",
+                  "field": "gross margin %",
                   "type": "quantitative",
                   "format": ",.2f"
                 }
@@ -588,225 +588,28 @@ export const BOARDS: ScriptedBoard[] = [
           "chart_source": "heuristic",
           "chart_note": null,
           "kpi": {
-            "value": "816.86",
-            "raw": 816.86,
-            "label": "average order",
+            "value": "46.30",
+            "raw": 46.3,
+            "label": "gross margin %",
             "caption": null,
             "delta": {
-              "text": "+7.8%",
+              "text": "+0.7%",
               "direction": "up",
               "caption": "vs 2026-07-01"
             },
             "sparkline": [
-              798.83,
-              780.84,
-              843.11,
-              827.75,
-              783.32,
-              873.79,
-              827.2,
-              829.21,
-              774.98,
-              1249.3,
-              757.41,
-              816.86
-            ]
-          },
-          "error": null
-        }
-      },
-      {
-        "title": "New customers",
-        "tile_type": "METRIC",
-        "question": "New customers per month",
-        "sql": "SELECT CAST(DATE_TRUNC('MONTH', c.signed_up_at) AS DATE) AS month, COUNT(*) AS \"signed up this month\" FROM public.customers AS c WHERE NOT c.is_deleted AND c.signed_up_at >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND c.signed_up_at < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY 1 ORDER BY 1 LIMIT 1000",
-        "sql_origin": "GENERATED",
-        "chart_config": null,
-        "table_config": null,
-        "grid_x": 7,
-        "grid_y": 27,
-        "grid_w": 5,
-        "grid_h": 3,
-        "position": 3,
-        "result": {
-          "status": "OK",
-          "columns": [
-            {
-              "name": "month",
-              "db_type": "date",
-              "semantic_type": "temporal"
-            },
-            {
-              "name": "signed up this month",
-              "db_type": "bigint",
-              "semantic_type": "quantitative"
-            }
-          ],
-          "rows": [
-            [
-              "2025-09-01",
-              30
-            ],
-            [
-              "2025-10-01",
-              23
-            ],
-            [
-              "2025-11-01",
-              34
-            ],
-            [
-              "2025-12-01",
-              31
-            ],
-            [
-              "2026-01-01",
-              33
-            ],
-            [
-              "2026-02-01",
-              21
-            ],
-            [
-              "2026-03-01",
-              26
-            ],
-            [
-              "2026-04-01",
-              41
-            ],
-            [
-              "2026-05-01",
-              38
-            ],
-            [
-              "2026-06-01",
-              52
-            ],
-            [
-              "2026-07-01",
-              32
-            ],
-            [
-              "2026-08-01",
-              27
-            ]
-          ],
-          "row_count": 12,
-          "truncated": false,
-          "duration_ms": 3,
-          "vega_spec": {
-            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-            "data": {
-              "values": [
-                {
-                  "month": "2025-09-01",
-                  "signed up this month": 30
-                },
-                {
-                  "month": "2025-10-01",
-                  "signed up this month": 23
-                },
-                {
-                  "month": "2025-11-01",
-                  "signed up this month": 34
-                },
-                {
-                  "month": "2025-12-01",
-                  "signed up this month": 31
-                },
-                {
-                  "month": "2026-01-01",
-                  "signed up this month": 33
-                },
-                {
-                  "month": "2026-02-01",
-                  "signed up this month": 21
-                },
-                {
-                  "month": "2026-03-01",
-                  "signed up this month": 26
-                },
-                {
-                  "month": "2026-04-01",
-                  "signed up this month": 41
-                },
-                {
-                  "month": "2026-05-01",
-                  "signed up this month": 38
-                },
-                {
-                  "month": "2026-06-01",
-                  "signed up this month": 52
-                },
-                {
-                  "month": "2026-07-01",
-                  "signed up this month": 32
-                },
-                {
-                  "month": "2026-08-01",
-                  "signed up this month": 27
-                }
-              ]
-            },
-            "mark": {
-              "type": "line"
-            },
-            "encoding": {
-              "x": {
-                "field": "month",
-                "type": "temporal"
-              },
-              "y": {
-                "field": "signed up this month",
-                "type": "quantitative"
-              },
-              "tooltip": [
-                {
-                  "field": "month",
-                  "type": "temporal"
-                },
-                {
-                  "field": "signed up this month",
-                  "type": "quantitative",
-                  "format": ","
-                }
-              ]
-            },
-            "usermeta": {
-              "datamind": {
-                "chart_type": "line",
-                "orientation": "auto",
-                "stack": "stacked",
-                "categories": 12
-              }
-            }
-          },
-          "chart_source": "heuristic",
-          "chart_note": null,
-          "kpi": {
-            "value": "27",
-            "raw": 27.0,
-            "label": "signed up this month",
-            "caption": null,
-            "delta": {
-              "text": "-15.6%",
-              "direction": "down",
-              "caption": "vs 2026-07-01"
-            },
-            "sparkline": [
-              30.0,
-              23.0,
-              34.0,
-              31.0,
-              33.0,
-              21.0,
-              26.0,
-              41.0,
-              38.0,
-              52.0,
-              32.0,
-              27.0
+              46.7,
+              46.4,
+              46.5,
+              46.7,
+              46.1,
+              46.6,
+              46.3,
+              46.4,
+              47.1,
+              44.2,
+              46.0,
+              46.3
             ]
           },
           "error": null
@@ -836,8 +639,8 @@ export const BOARDS: ScriptedBoard[] = [
         "grid_x": 0,
         "grid_y": 3,
         "grid_w": 8,
-        "grid_h": 7,
-        "position": 4,
+        "grid_h": 8,
+        "position": 3,
         "result": {
           "status": "OK",
           "columns": [
@@ -948,7 +751,7 @@ export const BOARDS: ScriptedBoard[] = [
           ],
           "row_count": 23,
           "truncated": false,
-          "duration_ms": 16,
+          "duration_ms": 30,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
@@ -1113,8 +916,8 @@ export const BOARDS: ScriptedBoard[] = [
         "grid_x": 8,
         "grid_y": 3,
         "grid_w": 4,
-        "grid_h": 7,
-        "position": 5,
+        "grid_h": 8,
+        "position": 4,
         "result": {
           "status": "OK",
           "columns": [
@@ -1145,7 +948,7 @@ export const BOARDS: ScriptedBoard[] = [
           ],
           "row_count": 3,
           "truncated": false,
-          "duration_ms": 12,
+          "duration_ms": 23,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
@@ -1234,18 +1037,18 @@ export const BOARDS: ScriptedBoard[] = [
         }
       },
       {
-        "title": "Revenue by region",
+        "title": "Top brands by revenue",
         "tile_type": "CHART",
-        "question": "Revenue by customer region over the last 12 months",
-        "sql": "SELECT r.name AS region, ROUND(SUM(o.total_amount), 2) AS revenue FROM public.orders AS o JOIN public.customers AS c ON c.id = o.customer_id JOIN public.regions AS r ON r.id = c.region_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY r.name ORDER BY revenue DESC LIMIT 1000",
+        "question": "Which brands brought in the most revenue over the last 12 months?",
+        "sql": "SELECT b.name AS brand, ROUND(SUM(oi.line_total), 2) AS revenue FROM public.orders AS o JOIN public.order_items AS oi ON oi.order_id = o.id JOIN public.products AS p ON p.id = oi.product_id JOIN public.brands AS b ON b.id = p.brand_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY b.name ORDER BY revenue DESC LIMIT 1000",
         "sql_origin": "GENERATED",
         "chart_config": {
           "chart_type": "bar",
           "orientation": "horizontal",
           "x_axis": {
-            "field": "region",
+            "field": "brand",
             "type": "nominal",
-            "label": "Region"
+            "label": "Brand"
           },
           "y_axis": {
             "field": "revenue",
@@ -1256,15 +1059,15 @@ export const BOARDS: ScriptedBoard[] = [
         },
         "table_config": null,
         "grid_x": 0,
-        "grid_y": 10,
+        "grid_y": 11,
         "grid_w": 6,
         "grid_h": 7,
-        "position": 6,
+        "position": 5,
         "result": {
           "status": "OK",
           "columns": [
             {
-              "name": "region",
+              "name": "brand",
               "db_type": "text",
               "semantic_type": "nominal"
             },
@@ -1276,76 +1079,76 @@ export const BOARDS: ScriptedBoard[] = [
           ],
           "rows": [
             [
-              "North America",
-              2462366.95
+              "Arcwave",
+              2000353.1
             ],
             [
-              "Europe",
-              1689182.61
+              "Halo Audio",
+              742139.3
             ],
             [
-              "Asia Pacific",
-              821988.23
+              "Vault",
+              559581.9
             ],
             [
-              "Nordics",
-              334011.73
+              "Lumen",
+              551702.5
             ],
             [
-              "Middle East",
-              303549.59
+              "Meshline",
+              526164.35
             ],
             [
-              "Latin America",
-              299011.64
+              "Keystone",
+              462331.8
             ],
             [
-              "Africa",
-              146671.4
+              "Clarity Labs",
+              323531.8
             ],
             [
-              "Unassigned",
-              15189.72
+              "Northpeak",
+              313924.65
             ]
           ],
           "row_count": 8,
           "truncated": false,
-          "duration_ms": 17,
+          "duration_ms": 48,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
               "values": [
                 {
-                  "region": "North America",
-                  "revenue": 2462366.95
+                  "brand": "Arcwave",
+                  "revenue": 2000353.1
                 },
                 {
-                  "region": "Europe",
-                  "revenue": 1689182.61
+                  "brand": "Halo Audio",
+                  "revenue": 742139.3
                 },
                 {
-                  "region": "Asia Pacific",
-                  "revenue": 821988.23
+                  "brand": "Vault",
+                  "revenue": 559581.9
                 },
                 {
-                  "region": "Nordics",
-                  "revenue": 334011.73
+                  "brand": "Lumen",
+                  "revenue": 551702.5
                 },
                 {
-                  "region": "Middle East",
-                  "revenue": 303549.59
+                  "brand": "Meshline",
+                  "revenue": 526164.35
                 },
                 {
-                  "region": "Latin America",
-                  "revenue": 299011.64
+                  "brand": "Keystone",
+                  "revenue": 462331.8
                 },
                 {
-                  "region": "Africa",
-                  "revenue": 146671.4
+                  "brand": "Clarity Labs",
+                  "revenue": 323531.8
                 },
                 {
-                  "region": "Unassigned",
-                  "revenue": 15189.72
+                  "brand": "Northpeak",
+                  "revenue": 313924.65
                 }
               ]
             },
@@ -1362,14 +1165,14 @@ export const BOARDS: ScriptedBoard[] = [
                 }
               },
               "y": {
-                "field": "region",
+                "field": "brand",
                 "type": "nominal",
-                "title": "Region",
+                "title": "Brand",
                 "sort": "-x"
               },
               "tooltip": [
                 {
-                  "field": "region",
+                  "field": "brand",
                   "type": "nominal"
                 },
                 {
@@ -1395,18 +1198,18 @@ export const BOARDS: ScriptedBoard[] = [
         }
       },
       {
-        "title": "Category mix by segment",
+        "title": "Revenue by region and segment",
         "tile_type": "CHART",
-        "question": "Revenue by product category and customer segment",
-        "sql": "SELECT cat.name AS category, c.segment, ROUND(SUM(oi.line_total), 2) AS revenue FROM public.orders AS o JOIN public.order_items AS oi ON oi.order_id = o.id JOIN public.products AS p ON p.id = oi.product_id JOIN public.categories AS cat ON cat.id = p.category_id JOIN public.customers AS c ON c.id = o.customer_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY cat.name, c.segment ORDER BY revenue DESC LIMIT 1000",
+        "question": "Revenue by customer region and segment over the last 12 months",
+        "sql": "SELECT r.name AS region, c.segment, ROUND(SUM(o.total_amount), 2) AS revenue FROM public.orders AS o JOIN public.customers AS c ON c.id = o.customer_id JOIN public.regions AS r ON r.id = c.region_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY r.name, c.segment ORDER BY revenue DESC LIMIT 1000",
         "sql_origin": "GENERATED",
         "chart_config": {
           "chart_type": "bar",
           "stack": "stacked",
           "x_axis": {
-            "field": "category",
+            "field": "region",
             "type": "nominal",
-            "label": "Category"
+            "label": "Region"
           },
           "y_axis": {
             "field": "revenue",
@@ -1421,15 +1224,15 @@ export const BOARDS: ScriptedBoard[] = [
         },
         "table_config": null,
         "grid_x": 6,
-        "grid_y": 10,
+        "grid_y": 11,
         "grid_w": 6,
         "grid_h": 7,
-        "position": 7,
+        "position": 6,
         "result": {
           "status": "OK",
           "columns": [
             {
-              "name": "category",
+              "name": "region",
               "db_type": "text",
               "semantic_type": "nominal"
             },
@@ -1446,192 +1249,242 @@ export const BOARDS: ScriptedBoard[] = [
           ],
           "rows": [
             [
-              "Displays",
+              "North America",
               "Enterprise",
-              848833.45
+              943662.51
             ],
             [
-              "Displays",
+              "North America",
               "Mid-Market",
-              637130.45
+              894699.24
             ],
             [
-              "Displays",
-              "SMB",
-              514389.2
-            ],
-            [
-              "Accessories",
+              "Europe",
               "Enterprise",
-              368505.5
+              694928.04
             ],
             [
-              "Peripherals",
+              "North America",
+              "SMB",
+              624005.2
+            ],
+            [
+              "Europe",
               "Mid-Market",
-              292825.8
+              535751.39
             ],
             [
-              "Audio",
+              "Europe",
+              "SMB",
+              458503.18
+            ],
+            [
+              "Asia Pacific",
               "Enterprise",
-              275877.85
+              317842.68
             ],
             [
-              "Accessories",
+              "Asia Pacific",
+              "SMB",
+              271066.89
+            ],
+            [
+              "Asia Pacific",
               "Mid-Market",
-              274114.6
+              233078.66
             ],
             [
-              "Peripherals",
+              "Nordics",
               "Enterprise",
-              272336.1
+              156824.31
             ],
             [
-              "Audio",
+              "Latin America",
               "Mid-Market",
-              265708.05
+              139262.6
             ],
             [
-              "Accessories",
-              "SMB",
-              223007.05
-            ],
-            [
-              "Peripherals",
-              "SMB",
-              220701.7
-            ],
-            [
-              "Storage",
+              "Middle East",
               "Enterprise",
-              207211.7
+              131369.41
             ],
             [
-              "Storage",
+              "Nordics",
               "Mid-Market",
-              206706.0
+              119049.11
             ],
             [
-              "Networking",
+              "Middle East",
               "Mid-Market",
-              205928.2
+              96334.03
             ],
             [
-              "Audio",
+              "Latin America",
               "SMB",
-              200553.4
+              94561.28
             ],
             [
-              "Networking",
+              "Middle East",
+              "SMB",
+              75846.15
+            ],
+            [
+              "Africa",
               "Enterprise",
-              175326.2
+              74029.63
             ],
             [
-              "Storage",
-              "SMB",
-              145664.2
+              "Latin America",
+              "Enterprise",
+              65187.76
             ],
             [
-              "Networking",
+              "Nordics",
               "SMB",
-              144909.95
+              58138.31
+            ],
+            [
+              "Africa",
+              "Mid-Market",
+              55733.43
+            ],
+            [
+              "Africa",
+              "SMB",
+              16908.34
+            ],
+            [
+              "Unassigned",
+              "Mid-Market",
+              8757.63
+            ],
+            [
+              "Unassigned",
+              "SMB",
+              6432.09
             ]
           ],
-          "row_count": 18,
+          "row_count": 23,
           "truncated": false,
-          "duration_ms": 29,
+          "duration_ms": 33,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
               "values": [
                 {
-                  "category": "Displays",
+                  "region": "North America",
                   "segment": "Enterprise",
-                  "revenue": 848833.45
+                  "revenue": 943662.51
                 },
                 {
-                  "category": "Displays",
+                  "region": "North America",
                   "segment": "Mid-Market",
-                  "revenue": 637130.45
+                  "revenue": 894699.24
                 },
                 {
-                  "category": "Displays",
-                  "segment": "SMB",
-                  "revenue": 514389.2
-                },
-                {
-                  "category": "Accessories",
+                  "region": "Europe",
                   "segment": "Enterprise",
-                  "revenue": 368505.5
+                  "revenue": 694928.04
                 },
                 {
-                  "category": "Peripherals",
+                  "region": "North America",
+                  "segment": "SMB",
+                  "revenue": 624005.2
+                },
+                {
+                  "region": "Europe",
                   "segment": "Mid-Market",
-                  "revenue": 292825.8
+                  "revenue": 535751.39
                 },
                 {
-                  "category": "Audio",
+                  "region": "Europe",
+                  "segment": "SMB",
+                  "revenue": 458503.18
+                },
+                {
+                  "region": "Asia Pacific",
                   "segment": "Enterprise",
-                  "revenue": 275877.85
+                  "revenue": 317842.68
                 },
                 {
-                  "category": "Accessories",
+                  "region": "Asia Pacific",
+                  "segment": "SMB",
+                  "revenue": 271066.89
+                },
+                {
+                  "region": "Asia Pacific",
                   "segment": "Mid-Market",
-                  "revenue": 274114.6
+                  "revenue": 233078.66
                 },
                 {
-                  "category": "Peripherals",
+                  "region": "Nordics",
                   "segment": "Enterprise",
-                  "revenue": 272336.1
+                  "revenue": 156824.31
                 },
                 {
-                  "category": "Audio",
+                  "region": "Latin America",
                   "segment": "Mid-Market",
-                  "revenue": 265708.05
+                  "revenue": 139262.6
                 },
                 {
-                  "category": "Accessories",
-                  "segment": "SMB",
-                  "revenue": 223007.05
-                },
-                {
-                  "category": "Peripherals",
-                  "segment": "SMB",
-                  "revenue": 220701.7
-                },
-                {
-                  "category": "Storage",
+                  "region": "Middle East",
                   "segment": "Enterprise",
-                  "revenue": 207211.7
+                  "revenue": 131369.41
                 },
                 {
-                  "category": "Storage",
+                  "region": "Nordics",
                   "segment": "Mid-Market",
-                  "revenue": 206706.0
+                  "revenue": 119049.11
                 },
                 {
-                  "category": "Networking",
+                  "region": "Middle East",
                   "segment": "Mid-Market",
-                  "revenue": 205928.2
+                  "revenue": 96334.03
                 },
                 {
-                  "category": "Audio",
+                  "region": "Latin America",
                   "segment": "SMB",
-                  "revenue": 200553.4
+                  "revenue": 94561.28
                 },
                 {
-                  "category": "Networking",
+                  "region": "Middle East",
+                  "segment": "SMB",
+                  "revenue": 75846.15
+                },
+                {
+                  "region": "Africa",
                   "segment": "Enterprise",
-                  "revenue": 175326.2
+                  "revenue": 74029.63
                 },
                 {
-                  "category": "Storage",
-                  "segment": "SMB",
-                  "revenue": 145664.2
+                  "region": "Latin America",
+                  "segment": "Enterprise",
+                  "revenue": 65187.76
                 },
                 {
-                  "category": "Networking",
+                  "region": "Nordics",
                   "segment": "SMB",
-                  "revenue": 144909.95
+                  "revenue": 58138.31
+                },
+                {
+                  "region": "Africa",
+                  "segment": "Mid-Market",
+                  "revenue": 55733.43
+                },
+                {
+                  "region": "Africa",
+                  "segment": "SMB",
+                  "revenue": 16908.34
+                },
+                {
+                  "region": "Unassigned",
+                  "segment": "Mid-Market",
+                  "revenue": 8757.63
+                },
+                {
+                  "region": "Unassigned",
+                  "segment": "SMB",
+                  "revenue": 6432.09
                 }
               ]
             },
@@ -1640,9 +1493,9 @@ export const BOARDS: ScriptedBoard[] = [
             },
             "encoding": {
               "x": {
-                "field": "category",
+                "field": "region",
                 "type": "nominal",
-                "title": "Category",
+                "title": "Region",
                 "sort": "-y"
               },
               "y": {
@@ -1659,7 +1512,7 @@ export const BOARDS: ScriptedBoard[] = [
               },
               "tooltip": [
                 {
-                  "field": "category",
+                  "field": "region",
                   "type": "nominal"
                 },
                 {
@@ -1678,7 +1531,7 @@ export const BOARDS: ScriptedBoard[] = [
                 "chart_type": "bar",
                 "orientation": "vertical",
                 "stack": "stacked",
-                "categories": 6
+                "categories": 8
               }
             }
           },
@@ -1689,305 +1542,19 @@ export const BOARDS: ScriptedBoard[] = [
         }
       },
       {
-        "title": "Products and customers",
+        "title": "Mix, margin and price",
         "tile_type": "TEXT",
-        "question": "What sells, and who buys it: products for this year, customers and returns for the last twelve months. An order counts once it is completed or shipped, never while cancelled or returned.",
+        "question": "Where the revenue comes from and what it earns: each segment month by month, each category month by month, what a product sells for against how many sell, and how much of a sale is margin. Revenue means completed and shipped orders, never cancelled or returned.",
         "sql": "",
         "sql_origin": "HANDWRITTEN",
         "chart_config": null,
         "table_config": null,
         "grid_x": 0,
-        "grid_y": 17,
+        "grid_y": 18,
         "grid_w": 12,
         "grid_h": 2,
-        "position": 8,
+        "position": 7,
         "result": null
-      },
-      {
-        "title": "Top products this year",
-        "tile_type": "TABLE",
-        "question": "Top 10 products by revenue this year",
-        "sql": "SELECT p.name AS product, cat.name AS category, SUM(oi.quantity) AS units, ROUND(SUM(oi.line_total), 2) AS revenue, ROUND(CAST(AVG(oi.unit_price) AS DECIMAL), 2) AS avg_price FROM public.orders AS o JOIN public.order_items AS oi ON oi.order_id = o.id JOIN public.products AS p ON p.id = oi.product_id JOIN public.categories AS cat ON cat.id = p.category_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('YEAR', CURRENT_DATE) GROUP BY p.name, cat.name ORDER BY revenue DESC LIMIT 10",
-        "sql_origin": "GENERATED",
-        "chart_config": null,
-        "table_config": {
-          "columns": [
-            {
-              "name": "product",
-              "label": "Product",
-              "format": "auto",
-              "align": "auto"
-            },
-            {
-              "name": "category",
-              "label": "Category",
-              "format": "auto",
-              "align": "auto"
-            },
-            {
-              "name": "units",
-              "label": "Units",
-              "format": "integer",
-              "align": "right"
-            },
-            {
-              "name": "revenue",
-              "label": "Revenue",
-              "format": "decimal",
-              "align": "right"
-            },
-            {
-              "name": "avg_price",
-              "label": "Avg price",
-              "format": "decimal",
-              "align": "right"
-            }
-          ],
-          "sort_column": "revenue",
-          "sort_direction": "desc"
-        },
-        "grid_x": 0,
-        "grid_y": 19,
-        "grid_w": 7,
-        "grid_h": 8,
-        "position": 9,
-        "result": {
-          "status": "OK",
-          "columns": [
-            {
-              "name": "product",
-              "db_type": "text",
-              "semantic_type": "nominal"
-            },
-            {
-              "name": "category",
-              "db_type": "text",
-              "semantic_type": "nominal"
-            },
-            {
-              "name": "units",
-              "db_type": "bigint",
-              "semantic_type": "quantitative"
-            },
-            {
-              "name": "revenue",
-              "db_type": "numeric",
-              "semantic_type": "quantitative"
-            },
-            {
-              "name": "avg_price",
-              "db_type": "numeric",
-              "semantic_type": "quantitative"
-            }
-          ],
-          "rows": [
-            [
-              "Arcwave 27\" 4K Monitor",
-              "Displays",
-              1494,
-              628356.3,
-              429.0
-            ],
-            [
-              "Arcwave 34\" UltraWide Monitor",
-              "Displays",
-              448,
-              287377.2,
-              649.0
-            ],
-            [
-              "Arcwave 32\" Curved QHD Monitor",
-              "Displays",
-              690,
-              266037.1,
-              389.0
-            ],
-            [
-              "Northpeak Thunderbolt 4 Dock",
-              "Accessories",
-              1122,
-              251178.65,
-              229.0
-            ],
-            [
-              "Halo NC700 Noise-Cancelling Headset",
-              "Audio",
-              741,
-              181844.7,
-              249.0
-            ],
-            [
-              "Vault 2TB Portable SSD",
-              "Storage",
-              889,
-              166187.7,
-              189.0
-            ],
-            [
-              "Arcwave 24\" FHD Monitor",
-              "Displays",
-              959,
-              160110.6,
-              169.0
-            ],
-            [
-              "Meshline Wi-Fi 6 Mesh System (3-pack)",
-              "Networking",
-              546,
-              150925.05,
-              279.0
-            ],
-            [
-              "Keystone K2 Mechanical Keyboard",
-              "Peripherals",
-              1035,
-              132315.3,
-              129.0
-            ],
-            [
-              "Arcwave 16\" Portable USB-C Monitor",
-              "Displays",
-              579,
-              124840.95,
-              219.0
-            ]
-          ],
-          "row_count": 10,
-          "truncated": false,
-          "duration_ms": 17,
-          "vega_spec": {
-            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-            "data": {
-              "values": [
-                {
-                  "product": "Arcwave 27\" 4K Monitor",
-                  "category": "Displays",
-                  "units": 1494,
-                  "revenue": 628356.3,
-                  "avg_price": 429.0
-                },
-                {
-                  "product": "Arcwave 34\" UltraWide Monitor",
-                  "category": "Displays",
-                  "units": 448,
-                  "revenue": 287377.2,
-                  "avg_price": 649.0
-                },
-                {
-                  "product": "Arcwave 32\" Curved QHD Monitor",
-                  "category": "Displays",
-                  "units": 690,
-                  "revenue": 266037.1,
-                  "avg_price": 389.0
-                },
-                {
-                  "product": "Northpeak Thunderbolt 4 Dock",
-                  "category": "Accessories",
-                  "units": 1122,
-                  "revenue": 251178.65,
-                  "avg_price": 229.0
-                },
-                {
-                  "product": "Halo NC700 Noise-Cancelling Headset",
-                  "category": "Audio",
-                  "units": 741,
-                  "revenue": 181844.7,
-                  "avg_price": 249.0
-                },
-                {
-                  "product": "Vault 2TB Portable SSD",
-                  "category": "Storage",
-                  "units": 889,
-                  "revenue": 166187.7,
-                  "avg_price": 189.0
-                },
-                {
-                  "product": "Arcwave 24\" FHD Monitor",
-                  "category": "Displays",
-                  "units": 959,
-                  "revenue": 160110.6,
-                  "avg_price": 169.0
-                },
-                {
-                  "product": "Meshline Wi-Fi 6 Mesh System (3-pack)",
-                  "category": "Networking",
-                  "units": 546,
-                  "revenue": 150925.05,
-                  "avg_price": 279.0
-                },
-                {
-                  "product": "Keystone K2 Mechanical Keyboard",
-                  "category": "Peripherals",
-                  "units": 1035,
-                  "revenue": 132315.3,
-                  "avg_price": 129.0
-                },
-                {
-                  "product": "Arcwave 16\" Portable USB-C Monitor",
-                  "category": "Displays",
-                  "units": 579,
-                  "revenue": 124840.95,
-                  "avg_price": 219.0
-                }
-              ]
-            },
-            "mark": {
-              "type": "bar"
-            },
-            "encoding": {
-              "x": {
-                "field": "avg_price",
-                "type": "quantitative"
-              },
-              "y": {
-                "field": "product",
-                "type": "nominal",
-                "sort": "-x"
-              },
-              "color": {
-                "field": "category",
-                "type": "nominal"
-              },
-              "tooltip": [
-                {
-                  "field": "product",
-                  "type": "nominal"
-                },
-                {
-                  "field": "avg_price",
-                  "type": "quantitative",
-                  "format": ","
-                },
-                {
-                  "field": "category",
-                  "type": "nominal"
-                },
-                {
-                  "field": "units",
-                  "type": "quantitative",
-                  "format": ","
-                },
-                {
-                  "field": "revenue",
-                  "type": "quantitative",
-                  "format": ",.2f"
-                }
-              ]
-            },
-            "usermeta": {
-              "datamind": {
-                "chart_type": "bar",
-                "orientation": "horizontal",
-                "stack": "stacked",
-                "categories": 10
-              }
-            }
-          },
-          "chart_source": "heuristic",
-          "chart_note": null,
-          "kpi": null,
-          "error": null
-        }
       },
       {
         "title": "Revenue by segment",
@@ -1996,7 +1563,8 @@ export const BOARDS: ScriptedBoard[] = [
         "sql": "SELECT CAST(DATE_TRUNC('MONTH', o.order_date) AS DATE) AS month, c.segment, ROUND(SUM(o.total_amount), 2) AS revenue FROM public.orders AS o JOIN public.customers AS c ON c.id = o.customer_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY 1, 2 ORDER BY 1, 2 LIMIT 1000",
         "sql_origin": "GENERATED",
         "chart_config": {
-          "chart_type": "line",
+          "chart_type": "area",
+          "stack": "stacked",
           "x_axis": {
             "field": "month",
             "type": "temporal",
@@ -2014,11 +1582,11 @@ export const BOARDS: ScriptedBoard[] = [
           }
         },
         "table_config": null,
-        "grid_x": 7,
-        "grid_y": 19,
-        "grid_w": 5,
-        "grid_h": 8,
-        "position": 10,
+        "grid_x": 0,
+        "grid_y": 20,
+        "grid_w": 6,
+        "grid_h": 7,
+        "position": 8,
         "result": {
           "status": "OK",
           "columns": [
@@ -2222,7 +1790,7 @@ export const BOARDS: ScriptedBoard[] = [
           ],
           "row_count": 36,
           "truncated": false,
-          "duration_ms": 15,
+          "duration_ms": 29,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
@@ -2410,7 +1978,7 @@ export const BOARDS: ScriptedBoard[] = [
               ]
             },
             "mark": {
-              "type": "line"
+              "type": "area"
             },
             "encoding": {
               "x": {
@@ -2448,7 +2016,7 @@ export const BOARDS: ScriptedBoard[] = [
             },
             "usermeta": {
               "datamind": {
-                "chart_type": "line",
+                "chart_type": "area",
                 "orientation": "auto",
                 "stack": "stacked",
                 "categories": 12
@@ -2462,73 +2030,1150 @@ export const BOARDS: ScriptedBoard[] = [
         }
       },
       {
-        "title": "Largest customers",
-        "tile_type": "TABLE",
-        "question": "Our eight largest customers over the last 12 months",
-        "sql": "SELECT c.name AS customer, c.segment, r.name AS region, COUNT(*) AS orders, ROUND(SUM(o.total_amount), 2) AS revenue FROM public.orders AS o JOIN public.customers AS c ON c.id = o.customer_id JOIN public.regions AS r ON r.id = c.region_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY c.name, c.segment, r.name ORDER BY revenue DESC LIMIT 8",
-        "sql_origin": "GENERATED_EDITED",
-        "chart_config": null,
-        "table_config": {
+        "title": "Revenue by category and month",
+        "tile_type": "CHART",
+        "question": "Revenue by product category, month by month",
+        "sql": "SELECT TO_CHAR(o.order_date, 'YYYY-MM') AS month, cat.name AS category, ROUND(SUM(oi.line_total), 2) AS revenue FROM public.orders AS o JOIN public.order_items AS oi ON oi.order_id = o.id JOIN public.products AS p ON p.id = oi.product_id JOIN public.categories AS cat ON cat.id = p.category_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY 1, 2 ORDER BY 1, 2 LIMIT 1000",
+        "sql_origin": "GENERATED",
+        "chart_config": {
+          "chart_type": "heatmap",
+          "x_axis": {
+            "field": "month",
+            "type": "nominal",
+            "label": "Month"
+          },
+          "y_axis": {
+            "field": "category",
+            "type": "nominal",
+            "label": "Category"
+          },
+          "color": {
+            "field": "revenue",
+            "type": "quantitative",
+            "label": "Revenue",
+            "aggregation": "none"
+          }
+        },
+        "table_config": null,
+        "grid_x": 6,
+        "grid_y": 20,
+        "grid_w": 6,
+        "grid_h": 7,
+        "position": 9,
+        "result": {
+          "status": "OK",
           "columns": [
             {
-              "name": "customer",
-              "label": "Customer",
-              "format": "auto",
-              "align": "auto"
+              "name": "month",
+              "db_type": "text",
+              "semantic_type": "nominal"
             },
             {
-              "name": "segment",
-              "label": "Segment",
-              "format": "auto",
-              "align": "auto"
-            },
-            {
-              "name": "region",
-              "label": "Region",
-              "format": "auto",
-              "align": "auto"
-            },
-            {
-              "name": "orders",
-              "label": "Orders",
-              "format": "integer",
-              "align": "right"
+              "name": "category",
+              "db_type": "text",
+              "semantic_type": "nominal"
             },
             {
               "name": "revenue",
-              "label": "Revenue",
-              "format": "decimal",
-              "align": "right"
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
             }
           ],
-          "sort_column": "revenue",
-          "sort_direction": "desc"
+          "rows": [
+            [
+              "2025-09",
+              "Accessories",
+              67556.1
+            ],
+            [
+              "2025-09",
+              "Audio",
+              59497.0
+            ],
+            [
+              "2025-09",
+              "Displays",
+              132745.9
+            ],
+            [
+              "2025-09",
+              "Networking",
+              45740.5
+            ],
+            [
+              "2025-09",
+              "Peripherals",
+              50920.85
+            ],
+            [
+              "2025-09",
+              "Storage",
+              42802.5
+            ],
+            [
+              "2025-10",
+              "Accessories",
+              51108.3
+            ],
+            [
+              "2025-10",
+              "Audio",
+              64058.2
+            ],
+            [
+              "2025-10",
+              "Displays",
+              144639.1
+            ],
+            [
+              "2025-10",
+              "Networking",
+              24924.95
+            ],
+            [
+              "2025-10",
+              "Peripherals",
+              64556.9
+            ],
+            [
+              "2025-10",
+              "Storage",
+              48496.0
+            ],
+            [
+              "2025-11",
+              "Accessories",
+              70028.6
+            ],
+            [
+              "2025-11",
+              "Audio",
+              80603.65
+            ],
+            [
+              "2025-11",
+              "Displays",
+              168059.9
+            ],
+            [
+              "2025-11",
+              "Networking",
+              52156.95
+            ],
+            [
+              "2025-11",
+              "Peripherals",
+              70679.25
+            ],
+            [
+              "2025-11",
+              "Storage",
+              49265.3
+            ],
+            [
+              "2025-12",
+              "Accessories",
+              81227.2
+            ],
+            [
+              "2025-12",
+              "Audio",
+              85268.45
+            ],
+            [
+              "2025-12",
+              "Displays",
+              200002.7
+            ],
+            [
+              "2025-12",
+              "Networking",
+              46301.65
+            ],
+            [
+              "2025-12",
+              "Peripherals",
+              90439.25
+            ],
+            [
+              "2025-12",
+              "Storage",
+              60068.3
+            ],
+            [
+              "2026-01",
+              "Accessories",
+              52390.35
+            ],
+            [
+              "2026-01",
+              "Audio",
+              47286.1
+            ],
+            [
+              "2026-01",
+              "Displays",
+              131372.95
+            ],
+            [
+              "2026-01",
+              "Networking",
+              38045.05
+            ],
+            [
+              "2026-01",
+              "Peripherals",
+              43101.9
+            ],
+            [
+              "2026-01",
+              "Storage",
+              37534.05
+            ],
+            [
+              "2026-02",
+              "Accessories",
+              59001.95
+            ],
+            [
+              "2026-02",
+              "Audio",
+              48225.0
+            ],
+            [
+              "2026-02",
+              "Displays",
+              119131.45
+            ],
+            [
+              "2026-02",
+              "Networking",
+              47066.0
+            ],
+            [
+              "2026-02",
+              "Peripherals",
+              55746.35
+            ],
+            [
+              "2026-02",
+              "Storage",
+              30127.65
+            ],
+            [
+              "2026-03",
+              "Accessories",
+              67934.5
+            ],
+            [
+              "2026-03",
+              "Audio",
+              53296.05
+            ],
+            [
+              "2026-03",
+              "Displays",
+              166745.85
+            ],
+            [
+              "2026-03",
+              "Networking",
+              49895.25
+            ],
+            [
+              "2026-03",
+              "Peripherals",
+              68342.75
+            ],
+            [
+              "2026-03",
+              "Storage",
+              49741.9
+            ],
+            [
+              "2026-04",
+              "Accessories",
+              64268.65
+            ],
+            [
+              "2026-04",
+              "Audio",
+              67815.45
+            ],
+            [
+              "2026-04",
+              "Displays",
+              162734.35
+            ],
+            [
+              "2026-04",
+              "Networking",
+              33582.35
+            ],
+            [
+              "2026-04",
+              "Peripherals",
+              65887.35
+            ],
+            [
+              "2026-04",
+              "Storage",
+              52812.15
+            ],
+            [
+              "2026-05",
+              "Accessories",
+              60002.5
+            ],
+            [
+              "2026-05",
+              "Audio",
+              58012.65
+            ],
+            [
+              "2026-05",
+              "Displays",
+              145545.2
+            ],
+            [
+              "2026-05",
+              "Networking",
+              55636.25
+            ],
+            [
+              "2026-05",
+              "Peripherals",
+              66219.85
+            ],
+            [
+              "2026-05",
+              "Storage",
+              43129.45
+            ],
+            [
+              "2026-06",
+              "Accessories",
+              155423.3
+            ],
+            [
+              "2026-06",
+              "Audio",
+              59213.4
+            ],
+            [
+              "2026-06",
+              "Displays",
+              306139.3
+            ],
+            [
+              "2026-06",
+              "Networking",
+              43987.85
+            ],
+            [
+              "2026-06",
+              "Peripherals",
+              93246.75
+            ],
+            [
+              "2026-06",
+              "Storage",
+              55244.7
+            ],
+            [
+              "2026-07",
+              "Accessories",
+              65541.55
+            ],
+            [
+              "2026-07",
+              "Audio",
+              57956.75
+            ],
+            [
+              "2026-07",
+              "Displays",
+              172577.1
+            ],
+            [
+              "2026-07",
+              "Networking",
+              43311.25
+            ],
+            [
+              "2026-07",
+              "Peripherals",
+              58452.85
+            ],
+            [
+              "2026-07",
+              "Storage",
+              42631.15
+            ],
+            [
+              "2026-08",
+              "Accessories",
+              71144.15
+            ],
+            [
+              "2026-08",
+              "Audio",
+              60906.6
+            ],
+            [
+              "2026-08",
+              "Displays",
+              150659.3
+            ],
+            [
+              "2026-08",
+              "Networking",
+              45516.3
+            ],
+            [
+              "2026-08",
+              "Peripherals",
+              58269.55
+            ],
+            [
+              "2026-08",
+              "Storage",
+              47728.75
+            ]
+          ],
+          "row_count": 72,
+          "truncated": false,
+          "duration_ms": 43,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "month": "2025-09",
+                  "category": "Accessories",
+                  "revenue": 67556.1
+                },
+                {
+                  "month": "2025-09",
+                  "category": "Audio",
+                  "revenue": 59497.0
+                },
+                {
+                  "month": "2025-09",
+                  "category": "Displays",
+                  "revenue": 132745.9
+                },
+                {
+                  "month": "2025-09",
+                  "category": "Networking",
+                  "revenue": 45740.5
+                },
+                {
+                  "month": "2025-09",
+                  "category": "Peripherals",
+                  "revenue": 50920.85
+                },
+                {
+                  "month": "2025-09",
+                  "category": "Storage",
+                  "revenue": 42802.5
+                },
+                {
+                  "month": "2025-10",
+                  "category": "Accessories",
+                  "revenue": 51108.3
+                },
+                {
+                  "month": "2025-10",
+                  "category": "Audio",
+                  "revenue": 64058.2
+                },
+                {
+                  "month": "2025-10",
+                  "category": "Displays",
+                  "revenue": 144639.1
+                },
+                {
+                  "month": "2025-10",
+                  "category": "Networking",
+                  "revenue": 24924.95
+                },
+                {
+                  "month": "2025-10",
+                  "category": "Peripherals",
+                  "revenue": 64556.9
+                },
+                {
+                  "month": "2025-10",
+                  "category": "Storage",
+                  "revenue": 48496.0
+                },
+                {
+                  "month": "2025-11",
+                  "category": "Accessories",
+                  "revenue": 70028.6
+                },
+                {
+                  "month": "2025-11",
+                  "category": "Audio",
+                  "revenue": 80603.65
+                },
+                {
+                  "month": "2025-11",
+                  "category": "Displays",
+                  "revenue": 168059.9
+                },
+                {
+                  "month": "2025-11",
+                  "category": "Networking",
+                  "revenue": 52156.95
+                },
+                {
+                  "month": "2025-11",
+                  "category": "Peripherals",
+                  "revenue": 70679.25
+                },
+                {
+                  "month": "2025-11",
+                  "category": "Storage",
+                  "revenue": 49265.3
+                },
+                {
+                  "month": "2025-12",
+                  "category": "Accessories",
+                  "revenue": 81227.2
+                },
+                {
+                  "month": "2025-12",
+                  "category": "Audio",
+                  "revenue": 85268.45
+                },
+                {
+                  "month": "2025-12",
+                  "category": "Displays",
+                  "revenue": 200002.7
+                },
+                {
+                  "month": "2025-12",
+                  "category": "Networking",
+                  "revenue": 46301.65
+                },
+                {
+                  "month": "2025-12",
+                  "category": "Peripherals",
+                  "revenue": 90439.25
+                },
+                {
+                  "month": "2025-12",
+                  "category": "Storage",
+                  "revenue": 60068.3
+                },
+                {
+                  "month": "2026-01",
+                  "category": "Accessories",
+                  "revenue": 52390.35
+                },
+                {
+                  "month": "2026-01",
+                  "category": "Audio",
+                  "revenue": 47286.1
+                },
+                {
+                  "month": "2026-01",
+                  "category": "Displays",
+                  "revenue": 131372.95
+                },
+                {
+                  "month": "2026-01",
+                  "category": "Networking",
+                  "revenue": 38045.05
+                },
+                {
+                  "month": "2026-01",
+                  "category": "Peripherals",
+                  "revenue": 43101.9
+                },
+                {
+                  "month": "2026-01",
+                  "category": "Storage",
+                  "revenue": 37534.05
+                },
+                {
+                  "month": "2026-02",
+                  "category": "Accessories",
+                  "revenue": 59001.95
+                },
+                {
+                  "month": "2026-02",
+                  "category": "Audio",
+                  "revenue": 48225.0
+                },
+                {
+                  "month": "2026-02",
+                  "category": "Displays",
+                  "revenue": 119131.45
+                },
+                {
+                  "month": "2026-02",
+                  "category": "Networking",
+                  "revenue": 47066.0
+                },
+                {
+                  "month": "2026-02",
+                  "category": "Peripherals",
+                  "revenue": 55746.35
+                },
+                {
+                  "month": "2026-02",
+                  "category": "Storage",
+                  "revenue": 30127.65
+                },
+                {
+                  "month": "2026-03",
+                  "category": "Accessories",
+                  "revenue": 67934.5
+                },
+                {
+                  "month": "2026-03",
+                  "category": "Audio",
+                  "revenue": 53296.05
+                },
+                {
+                  "month": "2026-03",
+                  "category": "Displays",
+                  "revenue": 166745.85
+                },
+                {
+                  "month": "2026-03",
+                  "category": "Networking",
+                  "revenue": 49895.25
+                },
+                {
+                  "month": "2026-03",
+                  "category": "Peripherals",
+                  "revenue": 68342.75
+                },
+                {
+                  "month": "2026-03",
+                  "category": "Storage",
+                  "revenue": 49741.9
+                },
+                {
+                  "month": "2026-04",
+                  "category": "Accessories",
+                  "revenue": 64268.65
+                },
+                {
+                  "month": "2026-04",
+                  "category": "Audio",
+                  "revenue": 67815.45
+                },
+                {
+                  "month": "2026-04",
+                  "category": "Displays",
+                  "revenue": 162734.35
+                },
+                {
+                  "month": "2026-04",
+                  "category": "Networking",
+                  "revenue": 33582.35
+                },
+                {
+                  "month": "2026-04",
+                  "category": "Peripherals",
+                  "revenue": 65887.35
+                },
+                {
+                  "month": "2026-04",
+                  "category": "Storage",
+                  "revenue": 52812.15
+                },
+                {
+                  "month": "2026-05",
+                  "category": "Accessories",
+                  "revenue": 60002.5
+                },
+                {
+                  "month": "2026-05",
+                  "category": "Audio",
+                  "revenue": 58012.65
+                },
+                {
+                  "month": "2026-05",
+                  "category": "Displays",
+                  "revenue": 145545.2
+                },
+                {
+                  "month": "2026-05",
+                  "category": "Networking",
+                  "revenue": 55636.25
+                },
+                {
+                  "month": "2026-05",
+                  "category": "Peripherals",
+                  "revenue": 66219.85
+                },
+                {
+                  "month": "2026-05",
+                  "category": "Storage",
+                  "revenue": 43129.45
+                },
+                {
+                  "month": "2026-06",
+                  "category": "Accessories",
+                  "revenue": 155423.3
+                },
+                {
+                  "month": "2026-06",
+                  "category": "Audio",
+                  "revenue": 59213.4
+                },
+                {
+                  "month": "2026-06",
+                  "category": "Displays",
+                  "revenue": 306139.3
+                },
+                {
+                  "month": "2026-06",
+                  "category": "Networking",
+                  "revenue": 43987.85
+                },
+                {
+                  "month": "2026-06",
+                  "category": "Peripherals",
+                  "revenue": 93246.75
+                },
+                {
+                  "month": "2026-06",
+                  "category": "Storage",
+                  "revenue": 55244.7
+                },
+                {
+                  "month": "2026-07",
+                  "category": "Accessories",
+                  "revenue": 65541.55
+                },
+                {
+                  "month": "2026-07",
+                  "category": "Audio",
+                  "revenue": 57956.75
+                },
+                {
+                  "month": "2026-07",
+                  "category": "Displays",
+                  "revenue": 172577.1
+                },
+                {
+                  "month": "2026-07",
+                  "category": "Networking",
+                  "revenue": 43311.25
+                },
+                {
+                  "month": "2026-07",
+                  "category": "Peripherals",
+                  "revenue": 58452.85
+                },
+                {
+                  "month": "2026-07",
+                  "category": "Storage",
+                  "revenue": 42631.15
+                },
+                {
+                  "month": "2026-08",
+                  "category": "Accessories",
+                  "revenue": 71144.15
+                },
+                {
+                  "month": "2026-08",
+                  "category": "Audio",
+                  "revenue": 60906.6
+                },
+                {
+                  "month": "2026-08",
+                  "category": "Displays",
+                  "revenue": 150659.3
+                },
+                {
+                  "month": "2026-08",
+                  "category": "Networking",
+                  "revenue": 45516.3
+                },
+                {
+                  "month": "2026-08",
+                  "category": "Peripherals",
+                  "revenue": 58269.55
+                },
+                {
+                  "month": "2026-08",
+                  "category": "Storage",
+                  "revenue": 47728.75
+                }
+              ]
+            },
+            "mark": {
+              "type": "rect"
+            },
+            "encoding": {
+              "x": {
+                "field": "month",
+                "type": "nominal",
+                "title": "Month"
+              },
+              "y": {
+                "field": "category",
+                "type": "nominal"
+              },
+              "color": {
+                "field": "revenue",
+                "type": "quantitative",
+                "title": "Revenue"
+              },
+              "tooltip": [
+                {
+                  "field": "month",
+                  "type": "nominal"
+                },
+                {
+                  "field": "category",
+                  "type": "nominal"
+                },
+                {
+                  "field": "revenue",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                }
+              ]
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "heatmap",
+                "orientation": "auto",
+                "stack": "stacked",
+                "categories": 12,
+                "bands": 6
+              }
+            }
+          },
+          "chart_source": "model",
+          "chart_note": null,
+          "kpi": null,
+          "error": null
+        }
+      },
+      {
+        "title": "Revenue against average order",
+        "tile_type": "CHART",
+        "question": "Monthly revenue against the average order value",
+        "sql": "SELECT TO_CHAR(o.order_date, 'YYYY-MM') AS month, ROUND(SUM(o.total_amount), 2) AS revenue, ROUND(CAST(AVG(o.total_amount) AS DECIMAL), 2) AS avg_order FROM public.orders AS o WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY 1 ORDER BY 1 LIMIT 1000",
+        "sql_origin": "GENERATED",
+        "chart_config": {
+          "chart_type": "combo",
+          "x_axis": {
+            "field": "month",
+            "type": "nominal",
+            "label": "Month"
+          },
+          "y_axis": {
+            "field": "revenue",
+            "type": "quantitative",
+            "label": "Revenue",
+            "aggregation": "none"
+          },
+          "y2_axis": {
+            "field": "avg_order",
+            "type": "quantitative",
+            "label": "Avg order",
+            "aggregation": "none"
+          }
         },
+        "table_config": null,
         "grid_x": 0,
         "grid_y": 27,
-        "grid_w": 7,
+        "grid_w": 6,
+        "grid_h": 7,
+        "position": 10,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "month",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "revenue",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            },
+            {
+              "name": "avg_order",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "2025-09",
+              433765.12,
+              798.83
+            ],
+            [
+              "2025-10",
+              445860.68,
+              780.84
+            ],
+            [
+              "2025-11",
+              539592.9,
+              843.11
+            ],
+            [
+              "2025-12",
+              628264.96,
+              827.75
+            ],
+            [
+              "2026-01",
+              365029.38,
+              783.32
+            ],
+            [
+              "2026-02",
+              401942.73,
+              873.79
+            ],
+            [
+              "2026-03",
+              503762.42,
+              827.2
+            ],
+            [
+              "2026-04",
+              500015.06,
+              829.21
+            ],
+            [
+              "2026-05",
+              484365.1,
+              774.98
+            ],
+            [
+              "2026-06",
+              787057.45,
+              1249.3
+            ],
+            [
+              "2026-07",
+              493830.9,
+              757.41
+            ],
+            [
+              "2026-08",
+              488485.17,
+              816.86
+            ]
+          ],
+          "row_count": 12,
+          "truncated": false,
+          "duration_ms": 17,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "month": "2025-09",
+                  "revenue": 433765.12,
+                  "avg_order": 798.83
+                },
+                {
+                  "month": "2025-10",
+                  "revenue": 445860.68,
+                  "avg_order": 780.84
+                },
+                {
+                  "month": "2025-11",
+                  "revenue": 539592.9,
+                  "avg_order": 843.11
+                },
+                {
+                  "month": "2025-12",
+                  "revenue": 628264.96,
+                  "avg_order": 827.75
+                },
+                {
+                  "month": "2026-01",
+                  "revenue": 365029.38,
+                  "avg_order": 783.32
+                },
+                {
+                  "month": "2026-02",
+                  "revenue": 401942.73,
+                  "avg_order": 873.79
+                },
+                {
+                  "month": "2026-03",
+                  "revenue": 503762.42,
+                  "avg_order": 827.2
+                },
+                {
+                  "month": "2026-04",
+                  "revenue": 500015.06,
+                  "avg_order": 829.21
+                },
+                {
+                  "month": "2026-05",
+                  "revenue": 484365.1,
+                  "avg_order": 774.98
+                },
+                {
+                  "month": "2026-06",
+                  "revenue": 787057.45,
+                  "avg_order": 1249.3
+                },
+                {
+                  "month": "2026-07",
+                  "revenue": 493830.9,
+                  "avg_order": 757.41
+                },
+                {
+                  "month": "2026-08",
+                  "revenue": 488485.17,
+                  "avg_order": 816.86
+                }
+              ]
+            },
+            "encoding": {
+              "x": {
+                "field": "month",
+                "type": "nominal",
+                "title": "Month"
+              },
+              "tooltip": [
+                {
+                  "field": "month",
+                  "type": "nominal"
+                },
+                {
+                  "field": "revenue",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                },
+                {
+                  "field": "avg_order",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                }
+              ]
+            },
+            "layer": [
+              {
+                "mark": {
+                  "type": "bar"
+                },
+                "encoding": {
+                  "y": {
+                    "field": "revenue",
+                    "type": "quantitative",
+                    "title": "Revenue",
+                    "axis": {
+                      "format": "~s"
+                    }
+                  },
+                  "color": {
+                    "datum": "Revenue"
+                  }
+                }
+              },
+              {
+                "mark": {
+                  "type": "line",
+                  "point": true
+                },
+                "encoding": {
+                  "y": {
+                    "field": "avg_order",
+                    "type": "quantitative",
+                    "title": "Avg order"
+                  },
+                  "color": {
+                    "datum": "Avg order"
+                  }
+                }
+              }
+            ],
+            "resolve": {
+              "scale": {
+                "y": "independent"
+              }
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "combo",
+                "orientation": "auto",
+                "stack": "stacked",
+                "categories": 12
+              }
+            }
+          },
+          "chart_source": "model",
+          "chart_note": null,
+          "kpi": null,
+          "error": null
+        }
+      },
+      {
+        "title": "Price against volume",
+        "tile_type": "CHART",
+        "question": "Each product's price against the units it sold over the last 12 months",
+        "sql": "SELECT p.name AS product, cat.name AS category, p.price, SUM(oi.quantity) AS units, ROUND(SUM(oi.line_total), 2) AS revenue FROM public.orders AS o JOIN public.order_items AS oi ON oi.order_id = o.id JOIN public.products AS p ON p.id = oi.product_id JOIN public.categories AS cat ON cat.id = p.category_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY p.name, cat.name, p.price ORDER BY revenue DESC LIMIT 1000",
+        "sql_origin": "GENERATED",
+        "chart_config": {
+          "chart_type": "scatter",
+          "x_axis": {
+            "field": "price",
+            "type": "quantitative",
+            "label": "Unit price"
+          },
+          "y_axis": {
+            "field": "units",
+            "type": "quantitative",
+            "label": "Units sold"
+          },
+          "series": {
+            "field": "category",
+            "type": "nominal"
+          },
+          "size": {
+            "field": "revenue",
+            "type": "quantitative"
+          }
+        },
+        "table_config": null,
+        "grid_x": 6,
+        "grid_y": 27,
+        "grid_w": 6,
         "grid_h": 7,
         "position": 11,
         "result": {
           "status": "OK",
           "columns": [
             {
-              "name": "customer",
+              "name": "product",
               "db_type": "text",
               "semantic_type": "nominal"
             },
             {
-              "name": "segment",
+              "name": "category",
               "db_type": "text",
               "semantic_type": "nominal"
             },
             {
-              "name": "region",
-              "db_type": "text",
-              "semantic_type": "nominal"
+              "name": "price",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
             },
             {
-              "name": "orders",
+              "name": "units",
               "db_type": "bigint",
               "semantic_type": "quantitative"
             },
@@ -2540,150 +3185,582 @@ export const BOARDS: ScriptedBoard[] = [
           ],
           "rows": [
             [
-              "Meridian Health Systems Inc.",
-              "Enterprise",
-              "North America",
-              7,
-              254455.58
+              "Arcwave 27\" 4K Monitor",
+              "Displays",
+              429.0,
+              1901,
+              801157.5
             ],
             [
-              "Crescent Foods (Pty) Ltd",
-              "Enterprise",
-              "Africa",
-              35,
-              74029.63
+              "Arcwave 34\" UltraWide Monitor",
+              "Displays",
+              649.0,
+              724,
+              464684.0
             ],
             [
-              "Crescent Logistics Pte Ltd",
-              "Enterprise",
-              "Asia Pacific",
-              47,
-              69823.45
+              "Arcwave 32\" Curved QHD Monitor",
+              "Displays",
+              389.0,
+              925,
+              355721.05
             ],
             [
-              "Onyx Legal ApS",
-              "Enterprise",
-              "Nordics",
-              40,
-              63439.99
+              "Northpeak Thunderbolt 4 Dock",
+              "Accessories",
+              229.0,
+              1398,
+              313924.65
             ],
             [
-              "Mosaic Academy S.L.",
-              "Enterprise",
-              "Europe",
-              39,
-              59839.36
+              "Halo NC700 Noise-Cancelling Headset",
+              "Audio",
+              249.0,
+              1166,
+              285490.95
             ],
             [
-              "Kestrel Clinic ApS",
-              "Enterprise",
-              "Nordics",
-              36,
-              53582.09
+              "Vault 2TB Portable SSD",
+              "Storage",
+              189.0,
+              1211,
+              226015.65
             ],
             [
-              "Silverline Dental Group LLC",
-              "Enterprise",
-              "North America",
-              27,
-              51604.91
+              "Arcwave 24\" FHD Monitor",
+              "Displays",
+              169.0,
+              1350,
+              224888.3
             ],
             [
-              "Cobalt Robotics Co.",
-              "Enterprise",
-              "North America",
-              30,
-              51500.84
+              "Meshline Wi-Fi 6 Mesh System (3-pack)",
+              "Networking",
+              279.0,
+              737,
+              203851.35
+            ],
+            [
+              "Keystone K2 Mechanical Keyboard",
+              "Peripherals",
+              129.0,
+              1469,
+              187765.95
+            ],
+            [
+              "Arcwave 16\" Portable USB-C Monitor",
+              "Displays",
+              219.0,
+              713,
+              153902.25
+            ],
+            [
+              "Halo Air Wireless Earbuds",
+              "Audio",
+              129.0,
+              1161,
+              147653.4
+            ],
+            [
+              "Clarity 4K Pro Webcam",
+              "Peripherals",
+              179.0,
+              767,
+              136111.6
+            ],
+            [
+              "Keystone Slim Low-Profile Keyboard",
+              "Peripherals",
+              79.0,
+              1647,
+              127225.55
+            ],
+            [
+              "Meshline Wi-Fi 6E Router",
+              "Networking",
+              229.0,
+              543,
+              122721.1
+            ],
+            [
+              "Lumen Dual Monitor Arm",
+              "Accessories",
+              139.0,
+              801,
+              109615.4
+            ],
+            [
+              "Halo Meet Conference Speakerphone",
+              "Audio",
+              199.0,
+              554,
+              109479.85
+            ],
+            [
+              "Vault NAS 4-Bay Enclosure",
+              "Storage",
+              499.0,
+              221,
+              108208.15
+            ],
+            [
+              "Lumen 100W GaN Charger",
+              "Accessories",
+              69.0,
+              1538,
+              104869.65
+            ],
+            [
+              "Vault 1TB NVMe SSD",
+              "Storage",
+              99.0,
+              1058,
+              103613.4
+            ],
+            [
+              "Lumen USB-C 7-in-1 Hub",
+              "Accessories",
+              59.0,
+              1707,
+              99444.5
+            ],
+            [
+              "Clarity Pen Display 13",
+              "Peripherals",
+              349.0,
+              276,
+              95329.35
+            ],
+            [
+              "Clarity 1080p Webcam",
+              "Peripherals",
+              69.0,
+              1351,
+              92090.85
+            ],
+            [
+              "Meshline 24-Port Smart Switch",
+              "Networking",
+              319.0,
+              289,
+              91170.2
+            ],
+            [
+              "Keystone Glide Wireless Mouse",
+              "Peripherals",
+              39.0,
+              2114,
+              81502.2
+            ],
+            [
+              "Vault 4TB External Hard Drive",
+              "Storage",
+              119.0,
+              672,
+              79140.95
+            ],
+            [
+              "Halo Office Wired Headset",
+              "Audio",
+              59.0,
+              1292,
+              75360.7
+            ],
+            [
+              "Halo Studio USB Microphone",
+              "Audio",
+              139.0,
+              515,
+              70612.0
+            ],
+            [
+              "Keystone Vertical Ergonomic Mouse",
+              "Peripherals",
+              59.0,
+              1127,
+              65838.1
+            ],
+            [
+              "Lumen Aluminium Laptop Stand",
+              "Accessories",
+              49.0,
+              1275,
+              61575.85
+            ],
+            [
+              "Halo Boom Bluetooth Speaker",
+              "Audio",
+              89.0,
+              608,
+              53542.4
+            ],
+            [
+              "Lumen Commuter Tech Backpack",
+              "Accessories",
+              99.0,
+              536,
+              52306.65
+            ],
+            [
+              "Meshline 8-Port Gigabit Switch",
+              "Networking",
+              49.0,
+              982,
+              47520.2
+            ],
+            [
+              "Lumen 20,000 mAh Power Bank",
+              "Accessories",
+              59.0,
+              764,
+              44533.2
+            ],
+            [
+              "Meshline USB-C Ethernet Adapter",
+              "Networking",
+              29.0,
+              1514,
+              43413.0
+            ],
+            [
+              "Vault 256GB USB-C Flash Drive",
+              "Storage",
+              35.0,
+              1231,
+              42603.75
+            ],
+            [
+              "Lumen Laptop Sleeve 14\"",
+              "Accessories",
+              39.0,
+              1051,
+              40308.45
+            ],
+            [
+              "Lumen Braided USB-C Cable (2 m)",
+              "Accessories",
+              19.0,
+              2083,
+              39048.8
+            ],
+            [
+              "Meshline Powerline Adapter Kit",
+              "Networking",
+              89.0,
+              199,
+              17488.5
             ]
           ],
-          "row_count": 8,
+          "row_count": 38,
           "truncated": false,
-          "duration_ms": 19,
+          "duration_ms": 31,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
               "values": [
                 {
-                  "customer": "Meridian Health Systems Inc.",
-                  "segment": "Enterprise",
-                  "region": "North America",
-                  "orders": 7,
-                  "revenue": 254455.58
+                  "product": "Arcwave 27\" 4K Monitor",
+                  "category": "Displays",
+                  "price": 429.0,
+                  "units": 1901,
+                  "revenue": 801157.5
                 },
                 {
-                  "customer": "Crescent Foods (Pty) Ltd",
-                  "segment": "Enterprise",
-                  "region": "Africa",
-                  "orders": 35,
-                  "revenue": 74029.63
+                  "product": "Arcwave 34\" UltraWide Monitor",
+                  "category": "Displays",
+                  "price": 649.0,
+                  "units": 724,
+                  "revenue": 464684.0
                 },
                 {
-                  "customer": "Crescent Logistics Pte Ltd",
-                  "segment": "Enterprise",
-                  "region": "Asia Pacific",
-                  "orders": 47,
-                  "revenue": 69823.45
+                  "product": "Arcwave 32\" Curved QHD Monitor",
+                  "category": "Displays",
+                  "price": 389.0,
+                  "units": 925,
+                  "revenue": 355721.05
                 },
                 {
-                  "customer": "Onyx Legal ApS",
-                  "segment": "Enterprise",
-                  "region": "Nordics",
-                  "orders": 40,
-                  "revenue": 63439.99
+                  "product": "Northpeak Thunderbolt 4 Dock",
+                  "category": "Accessories",
+                  "price": 229.0,
+                  "units": 1398,
+                  "revenue": 313924.65
                 },
                 {
-                  "customer": "Mosaic Academy S.L.",
-                  "segment": "Enterprise",
-                  "region": "Europe",
-                  "orders": 39,
-                  "revenue": 59839.36
+                  "product": "Halo NC700 Noise-Cancelling Headset",
+                  "category": "Audio",
+                  "price": 249.0,
+                  "units": 1166,
+                  "revenue": 285490.95
                 },
                 {
-                  "customer": "Kestrel Clinic ApS",
-                  "segment": "Enterprise",
-                  "region": "Nordics",
-                  "orders": 36,
-                  "revenue": 53582.09
+                  "product": "Vault 2TB Portable SSD",
+                  "category": "Storage",
+                  "price": 189.0,
+                  "units": 1211,
+                  "revenue": 226015.65
                 },
                 {
-                  "customer": "Silverline Dental Group LLC",
-                  "segment": "Enterprise",
-                  "region": "North America",
-                  "orders": 27,
-                  "revenue": 51604.91
+                  "product": "Arcwave 24\" FHD Monitor",
+                  "category": "Displays",
+                  "price": 169.0,
+                  "units": 1350,
+                  "revenue": 224888.3
                 },
                 {
-                  "customer": "Cobalt Robotics Co.",
-                  "segment": "Enterprise",
-                  "region": "North America",
-                  "orders": 30,
-                  "revenue": 51500.84
+                  "product": "Meshline Wi-Fi 6 Mesh System (3-pack)",
+                  "category": "Networking",
+                  "price": 279.0,
+                  "units": 737,
+                  "revenue": 203851.35
+                },
+                {
+                  "product": "Keystone K2 Mechanical Keyboard",
+                  "category": "Peripherals",
+                  "price": 129.0,
+                  "units": 1469,
+                  "revenue": 187765.95
+                },
+                {
+                  "product": "Arcwave 16\" Portable USB-C Monitor",
+                  "category": "Displays",
+                  "price": 219.0,
+                  "units": 713,
+                  "revenue": 153902.25
+                },
+                {
+                  "product": "Halo Air Wireless Earbuds",
+                  "category": "Audio",
+                  "price": 129.0,
+                  "units": 1161,
+                  "revenue": 147653.4
+                },
+                {
+                  "product": "Clarity 4K Pro Webcam",
+                  "category": "Peripherals",
+                  "price": 179.0,
+                  "units": 767,
+                  "revenue": 136111.6
+                },
+                {
+                  "product": "Keystone Slim Low-Profile Keyboard",
+                  "category": "Peripherals",
+                  "price": 79.0,
+                  "units": 1647,
+                  "revenue": 127225.55
+                },
+                {
+                  "product": "Meshline Wi-Fi 6E Router",
+                  "category": "Networking",
+                  "price": 229.0,
+                  "units": 543,
+                  "revenue": 122721.1
+                },
+                {
+                  "product": "Lumen Dual Monitor Arm",
+                  "category": "Accessories",
+                  "price": 139.0,
+                  "units": 801,
+                  "revenue": 109615.4
+                },
+                {
+                  "product": "Halo Meet Conference Speakerphone",
+                  "category": "Audio",
+                  "price": 199.0,
+                  "units": 554,
+                  "revenue": 109479.85
+                },
+                {
+                  "product": "Vault NAS 4-Bay Enclosure",
+                  "category": "Storage",
+                  "price": 499.0,
+                  "units": 221,
+                  "revenue": 108208.15
+                },
+                {
+                  "product": "Lumen 100W GaN Charger",
+                  "category": "Accessories",
+                  "price": 69.0,
+                  "units": 1538,
+                  "revenue": 104869.65
+                },
+                {
+                  "product": "Vault 1TB NVMe SSD",
+                  "category": "Storage",
+                  "price": 99.0,
+                  "units": 1058,
+                  "revenue": 103613.4
+                },
+                {
+                  "product": "Lumen USB-C 7-in-1 Hub",
+                  "category": "Accessories",
+                  "price": 59.0,
+                  "units": 1707,
+                  "revenue": 99444.5
+                },
+                {
+                  "product": "Clarity Pen Display 13",
+                  "category": "Peripherals",
+                  "price": 349.0,
+                  "units": 276,
+                  "revenue": 95329.35
+                },
+                {
+                  "product": "Clarity 1080p Webcam",
+                  "category": "Peripherals",
+                  "price": 69.0,
+                  "units": 1351,
+                  "revenue": 92090.85
+                },
+                {
+                  "product": "Meshline 24-Port Smart Switch",
+                  "category": "Networking",
+                  "price": 319.0,
+                  "units": 289,
+                  "revenue": 91170.2
+                },
+                {
+                  "product": "Keystone Glide Wireless Mouse",
+                  "category": "Peripherals",
+                  "price": 39.0,
+                  "units": 2114,
+                  "revenue": 81502.2
+                },
+                {
+                  "product": "Vault 4TB External Hard Drive",
+                  "category": "Storage",
+                  "price": 119.0,
+                  "units": 672,
+                  "revenue": 79140.95
+                },
+                {
+                  "product": "Halo Office Wired Headset",
+                  "category": "Audio",
+                  "price": 59.0,
+                  "units": 1292,
+                  "revenue": 75360.7
+                },
+                {
+                  "product": "Halo Studio USB Microphone",
+                  "category": "Audio",
+                  "price": 139.0,
+                  "units": 515,
+                  "revenue": 70612.0
+                },
+                {
+                  "product": "Keystone Vertical Ergonomic Mouse",
+                  "category": "Peripherals",
+                  "price": 59.0,
+                  "units": 1127,
+                  "revenue": 65838.1
+                },
+                {
+                  "product": "Lumen Aluminium Laptop Stand",
+                  "category": "Accessories",
+                  "price": 49.0,
+                  "units": 1275,
+                  "revenue": 61575.85
+                },
+                {
+                  "product": "Halo Boom Bluetooth Speaker",
+                  "category": "Audio",
+                  "price": 89.0,
+                  "units": 608,
+                  "revenue": 53542.4
+                },
+                {
+                  "product": "Lumen Commuter Tech Backpack",
+                  "category": "Accessories",
+                  "price": 99.0,
+                  "units": 536,
+                  "revenue": 52306.65
+                },
+                {
+                  "product": "Meshline 8-Port Gigabit Switch",
+                  "category": "Networking",
+                  "price": 49.0,
+                  "units": 982,
+                  "revenue": 47520.2
+                },
+                {
+                  "product": "Lumen 20,000 mAh Power Bank",
+                  "category": "Accessories",
+                  "price": 59.0,
+                  "units": 764,
+                  "revenue": 44533.2
+                },
+                {
+                  "product": "Meshline USB-C Ethernet Adapter",
+                  "category": "Networking",
+                  "price": 29.0,
+                  "units": 1514,
+                  "revenue": 43413.0
+                },
+                {
+                  "product": "Vault 256GB USB-C Flash Drive",
+                  "category": "Storage",
+                  "price": 35.0,
+                  "units": 1231,
+                  "revenue": 42603.75
+                },
+                {
+                  "product": "Lumen Laptop Sleeve 14\"",
+                  "category": "Accessories",
+                  "price": 39.0,
+                  "units": 1051,
+                  "revenue": 40308.45
+                },
+                {
+                  "product": "Lumen Braided USB-C Cable (2 m)",
+                  "category": "Accessories",
+                  "price": 19.0,
+                  "units": 2083,
+                  "revenue": 39048.8
+                },
+                {
+                  "product": "Meshline Powerline Adapter Kit",
+                  "category": "Networking",
+                  "price": 89.0,
+                  "units": 199,
+                  "revenue": 17488.5
                 }
               ]
             },
             "mark": {
-              "type": "bar"
+              "type": "point"
             },
             "encoding": {
               "x": {
-                "field": "customer",
-                "type": "nominal",
-                "sort": "-y"
+                "field": "price",
+                "type": "quantitative",
+                "title": "Unit price"
               },
               "y": {
-                "field": "revenue",
+                "field": "units",
                 "type": "quantitative",
-                "axis": {
-                  "format": "~s"
-                }
+                "title": "Units sold"
               },
               "color": {
-                "field": "region",
+                "field": "category",
                 "type": "nominal"
+              },
+              "size": {
+                "field": "revenue",
+                "type": "quantitative"
               },
               "tooltip": [
                 {
-                  "field": "customer",
+                  "field": "price",
+                  "type": "quantitative",
+                  "format": ","
+                },
+                {
+                  "field": "units",
+                  "type": "quantitative",
+                  "format": ","
+                },
+                {
+                  "field": "category",
                   "type": "nominal"
                 },
                 {
@@ -2692,17 +3769,149 @@ export const BOARDS: ScriptedBoard[] = [
                   "format": ",.2f"
                 },
                 {
-                  "field": "region",
+                  "field": "product",
+                  "type": "nominal"
+                }
+              ]
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "scatter",
+                "orientation": "auto",
+                "stack": "stacked",
+                "categories": 27
+              }
+            }
+          },
+          "chart_source": "model",
+          "chart_note": null,
+          "kpi": null,
+          "error": null
+        }
+      },
+      {
+        "title": "Gross margin by category",
+        "tile_type": "CHART",
+        "question": "Gross margin by product category over the last 12 months",
+        "sql": "SELECT cat.name AS category, ROUND(100 * SUM(oi.line_total - oi.quantity * p.cost) / SUM(oi.line_total), 1) AS margin_pct FROM public.orders AS o JOIN public.order_items AS oi ON oi.order_id = o.id JOIN public.products AS p ON p.id = oi.product_id JOIN public.categories AS cat ON cat.id = p.category_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY cat.name ORDER BY margin_pct DESC LIMIT 1000",
+        "sql_origin": "GENERATED",
+        "chart_config": {
+          "chart_type": "bar",
+          "x_axis": {
+            "field": "category",
+            "type": "nominal",
+            "label": "Category"
+          },
+          "y_axis": {
+            "field": "margin_pct",
+            "type": "quantitative",
+            "label": "Gross margin %",
+            "aggregation": "none"
+          }
+        },
+        "table_config": null,
+        "grid_x": 0,
+        "grid_y": 34,
+        "grid_w": 6,
+        "grid_h": 7,
+        "position": 12,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "category",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "margin_pct",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "Accessories",
+              56.0
+            ],
+            [
+              "Audio",
+              54.6
+            ],
+            [
+              "Peripherals",
+              54.3
+            ],
+            [
+              "Networking",
+              45.9
+            ],
+            [
+              "Storage",
+              41.1
+            ],
+            [
+              "Displays",
+              37.1
+            ]
+          ],
+          "row_count": 6,
+          "truncated": false,
+          "duration_ms": 24,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "category": "Accessories",
+                  "margin_pct": 56.0
+                },
+                {
+                  "category": "Audio",
+                  "margin_pct": 54.6
+                },
+                {
+                  "category": "Peripherals",
+                  "margin_pct": 54.3
+                },
+                {
+                  "category": "Networking",
+                  "margin_pct": 45.9
+                },
+                {
+                  "category": "Storage",
+                  "margin_pct": 41.1
+                },
+                {
+                  "category": "Displays",
+                  "margin_pct": 37.1
+                }
+              ]
+            },
+            "mark": {
+              "type": "bar"
+            },
+            "encoding": {
+              "x": {
+                "field": "category",
+                "type": "nominal",
+                "title": "Category",
+                "sort": "-y"
+              },
+              "y": {
+                "field": "margin_pct",
+                "type": "quantitative",
+                "title": "Gross margin %"
+              },
+              "tooltip": [
+                {
+                  "field": "category",
                   "type": "nominal"
                 },
                 {
-                  "field": "segment",
-                  "type": "nominal"
-                },
-                {
-                  "field": "orders",
+                  "field": "margin_pct",
                   "type": "quantitative",
-                  "format": ","
+                  "format": ",.2f"
                 }
               ]
             },
@@ -2711,13 +3920,5282 @@ export const BOARDS: ScriptedBoard[] = [
                 "chart_type": "bar",
                 "orientation": "vertical",
                 "stack": "stacked",
-                "categories": 8
+                "categories": 6
+              }
+            }
+          },
+          "chart_source": "model",
+          "chart_note": null,
+          "kpi": null,
+          "error": null
+        }
+      },
+      {
+        "title": "Order size last month",
+        "tile_type": "CHART",
+        "question": "How were last month's orders spread by value, up to 3,000?",
+        "sql": "SELECT o.channel, o.total_amount AS \"order value\" FROM public.orders AS o WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '1 MONTH' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) AND o.total_amount < 3000 LIMIT 1000",
+        "sql_origin": "GENERATED",
+        "chart_config": {
+          "chart_type": "histogram",
+          "x_axis": {
+            "field": "order value",
+            "type": "quantitative",
+            "label": "Order value"
+          }
+        },
+        "table_config": null,
+        "grid_x": 6,
+        "grid_y": 34,
+        "grid_w": 6,
+        "grid_h": 7,
+        "position": 13,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "channel",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "order value",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "web",
+              92.94
+            ],
+            [
+              "partner",
+              1522.08
+            ],
+            [
+              "partner",
+              176.4
+            ],
+            [
+              "web",
+              296.6
+            ],
+            [
+              "web",
+              175.59
+            ],
+            [
+              "web",
+              575.93
+            ],
+            [
+              "web",
+              151.59
+            ],
+            [
+              "partner",
+              183.75
+            ],
+            [
+              "web",
+              469.75
+            ],
+            [
+              "partner",
+              1304.8
+            ],
+            [
+              "web",
+              1341.36
+            ],
+            [
+              "partner",
+              632.77
+            ],
+            [
+              "partner",
+              63.28
+            ],
+            [
+              "phone",
+              607.5
+            ],
+            [
+              "web",
+              1684.05
+            ],
+            [
+              "web",
+              63.4
+            ],
+            [
+              "web",
+              368.42
+            ],
+            [
+              "web",
+              104.79
+            ],
+            [
+              "web",
+              807.86
+            ],
+            [
+              "phone",
+              469.81
+            ],
+            [
+              "web",
+              1276.2
+            ],
+            [
+              "web",
+              357.0
+            ],
+            [
+              "web",
+              519.93
+            ],
+            [
+              "partner",
+              807.36
+            ],
+            [
+              "partner",
+              91.2
+            ],
+            [
+              "web",
+              1044.24
+            ],
+            [
+              "web",
+              2800.8
+            ],
+            [
+              "web",
+              128.79
+            ],
+            [
+              "partner",
+              1066.8
+            ],
+            [
+              "web",
+              499.22
+            ],
+            [
+              "phone",
+              970.08
+            ],
+            [
+              "web",
+              771.72
+            ],
+            [
+              "web",
+              158.0
+            ],
+            [
+              "web",
+              744.69
+            ],
+            [
+              "phone",
+              677.82
+            ],
+            [
+              "web",
+              1772.84
+            ],
+            [
+              "web",
+              1255.68
+            ],
+            [
+              "web",
+              1176.48
+            ],
+            [
+              "phone",
+              2076.45
+            ],
+            [
+              "web",
+              80.79
+            ],
+            [
+              "phone",
+              590.4
+            ],
+            [
+              "phone",
+              597.38
+            ],
+            [
+              "web",
+              514.92
+            ],
+            [
+              "partner",
+              1251.61
+            ],
+            [
+              "web",
+              1269.6
+            ],
+            [
+              "web",
+              1595.0
+            ],
+            [
+              "web",
+              251.0
+            ],
+            [
+              "web",
+              510.51
+            ],
+            [
+              "web",
+              352.8
+            ],
+            [
+              "phone",
+              507.5
+            ],
+            [
+              "web",
+              343.36
+            ],
+            [
+              "phone",
+              386.42
+            ],
+            [
+              "web",
+              245.0
+            ],
+            [
+              "web",
+              62.31
+            ],
+            [
+              "web",
+              1035.6
+            ],
+            [
+              "web",
+              160.57
+            ],
+            [
+              "web",
+              1191.65
+            ],
+            [
+              "phone",
+              469.75
+            ],
+            [
+              "web",
+              83.99
+            ],
+            [
+              "web",
+              463.07
+            ],
+            [
+              "web",
+              1713.6
+            ],
+            [
+              "web",
+              747.74
+            ],
+            [
+              "phone",
+              206.03
+            ],
+            [
+              "web",
+              304.11
+            ],
+            [
+              "phone",
+              175.0
+            ],
+            [
+              "partner",
+              202.7
+            ],
+            [
+              "web",
+              2493.56
+            ],
+            [
+              "web",
+              235.44
+            ],
+            [
+              "phone",
+              138.35
+            ],
+            [
+              "phone",
+              141.6
+            ],
+            [
+              "phone",
+              210.91
+            ],
+            [
+              "partner",
+              187.2
+            ],
+            [
+              "partner",
+              589.45
+            ],
+            [
+              "web",
+              158.97
+            ],
+            [
+              "web",
+              727.2
+            ],
+            [
+              "phone",
+              888.03
+            ],
+            [
+              "web",
+              2887.2
+            ],
+            [
+              "web",
+              1251.61
+            ],
+            [
+              "web",
+              543.91
+            ],
+            [
+              "web",
+              157.25
+            ],
+            [
+              "partner",
+              106.8
+            ],
+            [
+              "web",
+              834.41
+            ],
+            [
+              "phone",
+              63.28
+            ],
+            [
+              "phone",
+              2666.27
+            ],
+            [
+              "web",
+              170.85
+            ],
+            [
+              "phone",
+              1239.84
+            ],
+            [
+              "web",
+              78.99
+            ],
+            [
+              "web",
+              1414.82
+            ],
+            [
+              "web",
+              1024.8
+            ],
+            [
+              "phone",
+              366.12
+            ],
+            [
+              "web",
+              905.4
+            ],
+            [
+              "web",
+              1392.11
+            ],
+            [
+              "web",
+              574.86
+            ],
+            [
+              "phone",
+              2080.25
+            ],
+            [
+              "web",
+              424.71
+            ],
+            [
+              "web",
+              619.2
+            ],
+            [
+              "web",
+              562.1
+            ],
+            [
+              "phone",
+              784.8
+            ],
+            [
+              "web",
+              598.56
+            ],
+            [
+              "web",
+              834.41
+            ],
+            [
+              "phone",
+              89.7
+            ],
+            [
+              "phone",
+              1960.53
+            ],
+            [
+              "phone",
+              42.0
+            ],
+            [
+              "phone",
+              1134.69
+            ],
+            [
+              "web",
+              793.8
+            ],
+            [
+              "phone",
+              910.98
+            ],
+            [
+              "phone",
+              138.35
+            ],
+            [
+              "web",
+              910.87
+            ],
+            [
+              "web",
+              1384.3
+            ],
+            [
+              "partner",
+              1297.03
+            ],
+            [
+              "web",
+              89.46
+            ],
+            [
+              "web",
+              1618.4
+            ],
+            [
+              "web",
+              1184.04
+            ],
+            [
+              "web",
+              553.52
+            ],
+            [
+              "phone",
+              165.6
+            ],
+            [
+              "web",
+              483.75
+            ],
+            [
+              "web",
+              511.58
+            ],
+            [
+              "web",
+              478.34
+            ],
+            [
+              "web",
+              242.39
+            ],
+            [
+              "partner",
+              63.28
+            ],
+            [
+              "web",
+              1717.5
+            ],
+            [
+              "web",
+              291.03
+            ],
+            [
+              "phone",
+              897.84
+            ],
+            [
+              "web",
+              1119.69
+            ],
+            [
+              "partner",
+              839.28
+            ],
+            [
+              "web",
+              1682.4
+            ],
+            [
+              "phone",
+              69.6
+            ],
+            [
+              "web",
+              1137.78
+            ],
+            [
+              "web",
+              738.0
+            ],
+            [
+              "web",
+              400.25
+            ],
+            [
+              "web",
+              419.04
+            ],
+            [
+              "partner",
+              128.62
+            ],
+            [
+              "phone",
+              86.25
+            ],
+            [
+              "web",
+              660.66
+            ],
+            [
+              "web",
+              1100.71
+            ],
+            [
+              "phone",
+              46.8
+            ],
+            [
+              "web",
+              47.53
+            ],
+            [
+              "web",
+              450.45
+            ],
+            [
+              "web",
+              94.72
+            ],
+            [
+              "web",
+              2845.83
+            ],
+            [
+              "web",
+              204.12
+            ],
+            [
+              "web",
+              138.51
+            ],
+            [
+              "phone",
+              725.01
+            ],
+            [
+              "web",
+              1624.1
+            ],
+            [
+              "web",
+              170.04
+            ],
+            [
+              "web",
+              622.5
+            ],
+            [
+              "web",
+              1634.49
+            ],
+            [
+              "web",
+              760.51
+            ],
+            [
+              "web",
+              1245.84
+            ],
+            [
+              "web",
+              412.48
+            ],
+            [
+              "web",
+              579.88
+            ],
+            [
+              "phone",
+              429.6
+            ],
+            [
+              "web",
+              875.7
+            ],
+            [
+              "web",
+              315.48
+            ],
+            [
+              "partner",
+              88.16
+            ],
+            [
+              "phone",
+              90.48
+            ],
+            [
+              "partner",
+              142.5
+            ],
+            [
+              "web",
+              135.47
+            ],
+            [
+              "web",
+              192.93
+            ],
+            [
+              "partner",
+              960.81
+            ],
+            [
+              "web",
+              189.83
+            ],
+            [
+              "phone",
+              91.64
+            ],
+            [
+              "web",
+              97.05
+            ],
+            [
+              "phone",
+              331.2
+            ],
+            [
+              "web",
+              136.54
+            ],
+            [
+              "web",
+              521.45
+            ],
+            [
+              "phone",
+              967.98
+            ],
+            [
+              "web",
+              80.79
+            ],
+            [
+              "phone",
+              70.8
+            ],
+            [
+              "phone",
+              31.1
+            ],
+            [
+              "web",
+              70.1
+            ],
+            [
+              "web",
+              1110.14
+            ],
+            [
+              "phone",
+              245.6
+            ],
+            [
+              "web",
+              765.18
+            ],
+            [
+              "partner",
+              148.01
+            ],
+            [
+              "phone",
+              626.86
+            ],
+            [
+              "web",
+              238.8
+            ],
+            [
+              "web",
+              403.26
+            ],
+            [
+              "web",
+              101.19
+            ],
+            [
+              "web",
+              73.27
+            ],
+            [
+              "web",
+              420.12
+            ],
+            [
+              "web",
+              80.79
+            ],
+            [
+              "partner",
+              213.64
+            ],
+            [
+              "web",
+              2321.96
+            ],
+            [
+              "web",
+              80.05
+            ],
+            [
+              "web",
+              165.6
+            ],
+            [
+              "phone",
+              41.83
+            ],
+            [
+              "partner",
+              81.51
+            ],
+            [
+              "web",
+              789.27
+            ],
+            [
+              "web",
+              1483.32
+            ],
+            [
+              "web",
+              1088.8
+            ],
+            [
+              "web",
+              1842.48
+            ],
+            [
+              "web",
+              672.46
+            ],
+            [
+              "web",
+              472.8
+            ],
+            [
+              "web",
+              814.23
+            ],
+            [
+              "phone",
+              141.6
+            ],
+            [
+              "partner",
+              222.01
+            ],
+            [
+              "phone",
+              202.7
+            ],
+            [
+              "web",
+              811.2
+            ],
+            [
+              "web",
+              362.5
+            ],
+            [
+              "web",
+              71.94
+            ],
+            [
+              "phone",
+              291.9
+            ],
+            [
+              "partner",
+              99.85
+            ],
+            [
+              "web",
+              85.2
+            ],
+            [
+              "web",
+              405.41
+            ],
+            [
+              "phone",
+              122.27
+            ],
+            [
+              "web",
+              1985.2
+            ],
+            [
+              "partner",
+              708.12
+            ],
+            [
+              "phone",
+              2007.6
+            ],
+            [
+              "web",
+              1797.5
+            ],
+            [
+              "web",
+              589.32
+            ],
+            [
+              "phone",
+              1537.97
+            ],
+            [
+              "phone",
+              55.75
+            ],
+            [
+              "partner",
+              1400.4
+            ],
+            [
+              "web",
+              589.88
+            ],
+            [
+              "partner",
+              1134.0
+            ],
+            [
+              "partner",
+              748.6
+            ],
+            [
+              "phone",
+              582.55
+            ],
+            [
+              "web",
+              75.01
+            ],
+            [
+              "web",
+              160.11
+            ],
+            [
+              "partner",
+              341.05
+            ],
+            [
+              "web",
+              192.93
+            ],
+            [
+              "phone",
+              796.92
+            ],
+            [
+              "web",
+              292.79
+            ],
+            [
+              "web",
+              98.88
+            ],
+            [
+              "web",
+              875.27
+            ],
+            [
+              "phone",
+              753.97
+            ],
+            [
+              "web",
+              442.5
+            ],
+            [
+              "phone",
+              51.45
+            ],
+            [
+              "web",
+              707.41
+            ],
+            [
+              "phone",
+              148.01
+            ],
+            [
+              "web",
+              74.3
+            ],
+            [
+              "web",
+              2289.72
+            ],
+            [
+              "web",
+              552.16
+            ],
+            [
+              "web",
+              1409.27
+            ],
+            [
+              "web",
+              723.84
+            ],
+            [
+              "phone",
+              2390.4
+            ],
+            [
+              "phone",
+              323.64
+            ],
+            [
+              "web",
+              212.36
+            ],
+            [
+              "web",
+              566.4
+            ],
+            [
+              "web",
+              477.6
+            ],
+            [
+              "web",
+              83.74
+            ],
+            [
+              "partner",
+              686.51
+            ],
+            [
+              "web",
+              93.65
+            ],
+            [
+              "web",
+              323.1
+            ],
+            [
+              "phone",
+              2088.16
+            ],
+            [
+              "partner",
+              165.08
+            ],
+            [
+              "web",
+              563.06
+            ],
+            [
+              "phone",
+              281.21
+            ],
+            [
+              "partner",
+              525.6
+            ],
+            [
+              "phone",
+              438.76
+            ],
+            [
+              "web",
+              2842.12
+            ],
+            [
+              "phone",
+              83.66
+            ],
+            [
+              "phone",
+              375.84
+            ],
+            [
+              "web",
+              151.59
+            ],
+            [
+              "phone",
+              284.43
+            ],
+            [
+              "partner",
+              135.7
+            ],
+            [
+              "web",
+              62.54
+            ],
+            [
+              "web",
+              228.52
+            ],
+            [
+              "web",
+              101.26
+            ],
+            [
+              "web",
+              1195.56
+            ],
+            [
+              "web",
+              453.6
+            ],
+            [
+              "phone",
+              167.31
+            ],
+            [
+              "web",
+              2352.0
+            ],
+            [
+              "partner",
+              982.41
+            ],
+            [
+              "web",
+              259.2
+            ],
+            [
+              "web",
+              1099.2
+            ],
+            [
+              "web",
+              169.46
+            ],
+            [
+              "phone",
+              438.71
+            ],
+            [
+              "partner",
+              2841.3
+            ],
+            [
+              "web",
+              49.89
+            ],
+            [
+              "web",
+              394.38
+            ],
+            [
+              "web",
+              41.09
+            ],
+            [
+              "partner",
+              598.63
+            ],
+            [
+              "phone",
+              573.79
+            ],
+            [
+              "phone",
+              464.45
+            ],
+            [
+              "phone",
+              163.02
+            ],
+            [
+              "web",
+              642.0
+            ],
+            [
+              "partner",
+              1629.8
+            ],
+            [
+              "web",
+              450.0
+            ],
+            [
+              "web",
+              286.57
+            ],
+            [
+              "web",
+              1004.4
+            ],
+            [
+              "web",
+              857.85
+            ],
+            [
+              "web",
+              928.75
+            ],
+            [
+              "web",
+              614.46
+            ],
+            [
+              "web",
+              733.8
+            ],
+            [
+              "phone",
+              350.46
+            ],
+            [
+              "phone",
+              298.16
+            ],
+            [
+              "web",
+              270.9
+            ],
+            [
+              "web",
+              236.0
+            ],
+            [
+              "phone",
+              2432.88
+            ],
+            [
+              "partner",
+              140.6
+            ],
+            [
+              "web",
+              1380.0
+            ],
+            [
+              "phone",
+              334.62
+            ],
+            [
+              "phone",
+              572.25
+            ],
+            [
+              "web",
+              361.39
+            ],
+            [
+              "web",
+              139.59
+            ],
+            [
+              "web",
+              253.11
+            ],
+            [
+              "web",
+              1000.8
+            ],
+            [
+              "web",
+              466.8
+            ],
+            [
+              "web",
+              309.6
+            ],
+            [
+              "partner",
+              197.4
+            ],
+            [
+              "phone",
+              795.76
+            ],
+            [
+              "phone",
+              329.75
+            ],
+            [
+              "web",
+              650.58
+            ],
+            [
+              "phone",
+              1754.9
+            ],
+            [
+              "web",
+              1270.91
+            ],
+            [
+              "web",
+              73.27
+            ],
+            [
+              "phone",
+              267.05
+            ],
+            [
+              "phone",
+              1605.53
+            ],
+            [
+              "web",
+              1142.4
+            ],
+            [
+              "web",
+              450.44
+            ],
+            [
+              "phone",
+              946.08
+            ],
+            [
+              "partner",
+              415.06
+            ],
+            [
+              "web",
+              136.54
+            ],
+            [
+              "phone",
+              103.24
+            ],
+            [
+              "web",
+              440.53
+            ],
+            [
+              "phone",
+              1102.74
+            ],
+            [
+              "web",
+              2267.27
+            ],
+            [
+              "phone",
+              654.33
+            ],
+            [
+              "web",
+              443.64
+            ],
+            [
+              "web",
+              1412.48
+            ],
+            [
+              "phone",
+              424.8
+            ],
+            [
+              "web",
+              1171.8
+            ],
+            [
+              "phone",
+              847.04
+            ],
+            [
+              "web",
+              153.81
+            ],
+            [
+              "web",
+              254.04
+            ],
+            [
+              "phone",
+              181.25
+            ],
+            [
+              "web",
+              128.79
+            ],
+            [
+              "phone",
+              585.0
+            ],
+            [
+              "phone",
+              601.68
+            ],
+            [
+              "web",
+              265.98
+            ],
+            [
+              "web",
+              1406.1
+            ],
+            [
+              "partner",
+              505.92
+            ],
+            [
+              "web",
+              56.79
+            ],
+            [
+              "phone",
+              392.51
+            ],
+            [
+              "web",
+              276.22
+            ],
+            [
+              "phone",
+              219.24
+            ],
+            [
+              "web",
+              2637.33
+            ],
+            [
+              "phone",
+              352.8
+            ],
+            [
+              "partner",
+              2009.58
+            ],
+            [
+              "web",
+              627.84
+            ],
+            [
+              "partner",
+              366.24
+            ],
+            [
+              "web",
+              1670.29
+            ],
+            [
+              "web",
+              337.84
+            ],
+            [
+              "phone",
+              607.03
+            ],
+            [
+              "phone",
+              1671.6
+            ],
+            [
+              "web",
+              32.79
+            ],
+            [
+              "web",
+              325.2
+            ],
+            [
+              "web",
+              41.6
+            ],
+            [
+              "phone",
+              453.6
+            ],
+            [
+              "partner",
+              306.12
+            ],
+            [
+              "web",
+              169.66
+            ],
+            [
+              "web",
+              1029.6
+            ],
+            [
+              "web",
+              51.99
+            ],
+            [
+              "web",
+              698.25
+            ],
+            [
+              "web",
+              2127.93
+            ],
+            [
+              "phone",
+              464.4
+            ],
+            [
+              "partner",
+              405.6
+            ],
+            [
+              "phone",
+              336.93
+            ],
+            [
+              "web",
+              1234.17
+            ],
+            [
+              "partner",
+              226.8
+            ],
+            [
+              "web",
+              865.51
+            ],
+            [
+              "web",
+              293.86
+            ],
+            [
+              "web",
+              2917.5
+            ],
+            [
+              "web",
+              466.8
+            ],
+            [
+              "partner",
+              644.96
+            ],
+            [
+              "web",
+              527.56
+            ],
+            [
+              "web",
+              82.49
+            ],
+            [
+              "phone",
+              385.86
+            ],
+            [
+              "web",
+              85.2
+            ],
+            [
+              "web",
+              415.8
+            ],
+            [
+              "web",
+              52.5
+            ],
+            [
+              "phone",
+              993.6
+            ],
+            [
+              "web",
+              1044.12
+            ],
+            [
+              "web",
+              127.59
+            ],
+            [
+              "web",
+              168.21
+            ],
+            [
+              "web",
+              1577.86
+            ],
+            [
+              "web",
+              81.36
+            ],
+            [
+              "web",
+              51.82
+            ],
+            [
+              "web",
+              171.24
+            ],
+            [
+              "web",
+              520.95
+            ],
+            [
+              "web",
+              2324.21
+            ],
+            [
+              "partner",
+              1294.92
+            ],
+            [
+              "web",
+              379.66
+            ],
+            [
+              "web",
+              729.84
+            ],
+            [
+              "web",
+              442.08
+            ],
+            [
+              "web",
+              73.27
+            ],
+            [
+              "phone",
+              213.43
+            ],
+            [
+              "web",
+              189.6
+            ],
+            [
+              "web",
+              882.5
+            ],
+            [
+              "partner",
+              70.06
+            ],
+            [
+              "web",
+              832.8
+            ],
+            [
+              "web",
+              222.01
+            ],
+            [
+              "web",
+              133.21
+            ],
+            [
+              "web",
+              331.2
+            ],
+            [
+              "partner",
+              149.08
+            ],
+            [
+              "partner",
+              175.25
+            ],
+            [
+              "web",
+              469.75
+            ],
+            [
+              "web",
+              2200.34
+            ],
+            [
+              "web",
+              447.23
+            ],
+            [
+              "partner",
+              84.73
+            ],
+            [
+              "web",
+              245.6
+            ],
+            [
+              "web",
+              544.45
+            ],
+            [
+              "web",
+              135.47
+            ],
+            [
+              "web",
+              136.54
+            ],
+            [
+              "web",
+              1196.91
+            ],
+            [
+              "web",
+              900.12
+            ],
+            [
+              "partner",
+              274.92
+            ],
+            [
+              "web",
+              73.27
+            ],
+            [
+              "phone",
+              148.01
+            ],
+            [
+              "web",
+              88.65
+            ],
+            [
+              "web",
+              1814.4
+            ],
+            [
+              "phone",
+              250.96
+            ],
+            [
+              "web",
+              252.58
+            ],
+            [
+              "phone",
+              409.08
+            ],
+            [
+              "web",
+              151.59
+            ],
+            [
+              "phone",
+              1443.58
+            ],
+            [
+              "partner",
+              511.2
+            ],
+            [
+              "partner",
+              538.98
+            ],
+            [
+              "web",
+              51.82
+            ],
+            [
+              "web",
+              580.22
+            ],
+            [
+              "web",
+              50.74
+            ],
+            [
+              "phone",
+              1537.2
+            ],
+            [
+              "web",
+              247.8
+            ],
+            [
+              "web",
+              1410.0
+            ],
+            [
+              "phone",
+              940.8
+            ],
+            [
+              "phone",
+              235.2
+            ],
+            [
+              "phone",
+              31.1
+            ],
+            [
+              "web",
+              619.2
+            ],
+            [
+              "web",
+              136.54
+            ],
+            [
+              "web",
+              48.14
+            ],
+            [
+              "phone",
+              120.23
+            ],
+            [
+              "web",
+              892.53
+            ],
+            [
+              "web",
+              846.93
+            ],
+            [
+              "web",
+              148.34
+            ],
+            [
+              "phone",
+              123.9
+            ],
+            [
+              "phone",
+              300.41
+            ],
+            [
+              "web",
+              955.2
+            ],
+            [
+              "phone",
+              216.91
+            ],
+            [
+              "phone",
+              1933.32
+            ],
+            [
+              "partner",
+              52.55
+            ],
+            [
+              "web",
+              307.81
+            ],
+            [
+              "web",
+              1111.11
+            ],
+            [
+              "web",
+              466.8
+            ],
+            [
+              "web",
+              765.77
+            ],
+            [
+              "web",
+              116.79
+            ],
+            [
+              "phone",
+              752.4
+            ],
+            [
+              "web",
+              1293.6
+            ],
+            [
+              "web",
+              32.79
+            ],
+            [
+              "web",
+              323.73
+            ],
+            [
+              "web",
+              441.18
+            ],
+            [
+              "web",
+              1061.39
+            ],
+            [
+              "web",
+              572.4
+            ],
+            [
+              "web",
+              351.78
+            ],
+            [
+              "partner",
+              1013.51
+            ],
+            [
+              "phone",
+              619.2
+            ],
+            [
+              "phone",
+              333.75
+            ],
+            [
+              "phone",
+              664.8
+            ],
+            [
+              "web",
+              483.75
+            ],
+            [
+              "web",
+              607.13
+            ],
+            [
+              "web",
+              987.6
+            ],
+            [
+              "web",
+              363.74
+            ],
+            [
+              "phone",
+              255.25
+            ],
+            [
+              "web",
+              163.59
+            ],
+            [
+              "phone",
+              20.71
+            ],
+            [
+              "phone",
+              1708.92
+            ],
+            [
+              "partner",
+              166.8
+            ],
+            [
+              "web",
+              427.44
+            ],
+            [
+              "partner",
+              446.16
+            ],
+            [
+              "phone",
+              85.02
+            ],
+            [
+              "web",
+              519.68
+            ],
+            [
+              "web",
+              977.73
+            ],
+            [
+              "web",
+              960.2
+            ],
+            [
+              "phone",
+              375.18
+            ],
+            [
+              "web",
+              149.19
+            ],
+            [
+              "phone",
+              371.09
+            ],
+            [
+              "partner",
+              52.55
+            ],
+            [
+              "web",
+              2076.16
+            ],
+            [
+              "phone",
+              274.8
+            ],
+            [
+              "web",
+              2397.04
+            ],
+            [
+              "phone",
+              31.1
+            ],
+            [
+              "phone",
+              1067.14
+            ],
+            [
+              "phone",
+              322.5
+            ],
+            [
+              "web",
+              375.6
+            ],
+            [
+              "web",
+              226.4
+            ],
+            [
+              "phone",
+              84.0
+            ],
+            [
+              "phone",
+              68.4
+            ],
+            [
+              "web",
+              80.79
+            ],
+            [
+              "phone",
+              920.2
+            ],
+            [
+              "phone",
+              135.45
+            ],
+            [
+              "phone",
+              920.2
+            ],
+            [
+              "phone",
+              189.83
+            ],
+            [
+              "phone",
+              1170.44
+            ],
+            [
+              "phone",
+              981.34
+            ],
+            [
+              "web",
+              1251.32
+            ],
+            [
+              "web",
+              1430.5
+            ],
+            [
+              "phone",
+              22.8
+            ],
+            [
+              "partner",
+              882.36
+            ],
+            [
+              "web",
+              780.44
+            ],
+            [
+              "web",
+              368.42
+            ],
+            [
+              "web",
+              638.73
+            ],
+            [
+              "web",
+              414.0
+            ],
+            [
+              "web",
+              418.8
+            ],
+            [
+              "phone",
+              1291.56
+            ],
+            [
+              "web",
+              390.22
+            ],
+            [
+              "web",
+              411.65
+            ],
+            [
+              "web",
+              2522.98
+            ],
+            [
+              "web",
+              185.85
+            ],
+            [
+              "web",
+              545.44
+            ],
+            [
+              "phone",
+              237.0
+            ],
+            [
+              "phone",
+              56.84
+            ],
+            [
+              "web",
+              2760.62
+            ],
+            [
+              "phone",
+              667.0
+            ],
+            [
+              "web",
+              175.0
+            ],
+            [
+              "web",
+              609.18
+            ],
+            [
+              "phone",
+              592.02
+            ],
+            [
+              "phone",
+              264.42
+            ],
+            [
+              "web",
+              233.31
+            ],
+            [
+              "web",
+              696.48
+            ],
+            [
+              "phone",
+              1421.0
+            ],
+            [
+              "phone",
+              265.12
+            ],
+            [
+              "partner",
+              140.61
+            ],
+            [
+              "partner",
+              736.81
+            ],
+            [
+              "web",
+              145.69
+            ],
+            [
+              "web",
+              205.0
+            ],
+            [
+              "web",
+              276.7
+            ],
+            [
+              "web",
+              221.95
+            ],
+            [
+              "web",
+              62.54
+            ],
+            [
+              "phone",
+              213.6
+            ],
+            [
+              "partner",
+              1726.83
+            ],
+            [
+              "phone",
+              76.3
+            ],
+            [
+              "web",
+              484.98
+            ],
+            [
+              "web",
+              343.79
+            ],
+            [
+              "web",
+              127.7
+            ],
+            [
+              "phone",
+              656.37
+            ],
+            [
+              "partner",
+              598.45
+            ],
+            [
+              "web",
+              1085.64
+            ],
+            [
+              "web",
+              1491.6
+            ],
+            [
+              "phone",
+              550.19
+            ],
+            [
+              "phone",
+              157.66
+            ],
+            [
+              "phone",
+              998.44
+            ],
+            [
+              "partner",
+              1312.95
+            ],
+            [
+              "partner",
+              988.19
+            ],
+            [
+              "web",
+              80.79
+            ],
+            [
+              "web",
+              147.27
+            ],
+            [
+              "web",
+              344.52
+            ],
+            [
+              "web",
+              301.16
+            ],
+            [
+              "phone",
+              235.41
+            ],
+            [
+              "web",
+              2175.03
+            ],
+            [
+              "phone",
+              270.32
+            ],
+            [
+              "web",
+              2166.45
+            ],
+            [
+              "web",
+              461.07
+            ],
+            [
+              "web",
+              168.38
+            ],
+            [
+              "web",
+              618.14
+            ],
+            [
+              "web",
+              2029.6
+            ],
+            [
+              "web",
+              810.81
+            ],
+            [
+              "partner",
+              279.3
+            ],
+            [
+              "web",
+              2088.16
+            ],
+            [
+              "web",
+              274.8
+            ],
+            [
+              "partner",
+              1977.72
+            ],
+            [
+              "phone",
+              309.6
+            ],
+            [
+              "partner",
+              263.35
+            ],
+            [
+              "web",
+              1212.24
+            ],
+            [
+              "web",
+              83.99
+            ],
+            [
+              "phone",
+              292.85
+            ],
+            [
+              "partner",
+              447.23
+            ],
+            [
+              "partner",
+              479.41
+            ],
+            [
+              "web",
+              151.59
+            ],
+            [
+              "partner",
+              1759.49
+            ],
+            [
+              "web",
+              1529.39
+            ],
+            [
+              "web",
+              995.17
+            ],
+            [
+              "web",
+              2490.0
+            ]
+          ],
+          "row_count": 573,
+          "truncated": false,
+          "duration_ms": 13,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "channel": "web",
+                  "order value": 92.94
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1522.08
+                },
+                {
+                  "channel": "partner",
+                  "order value": 176.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 296.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 175.59
+                },
+                {
+                  "channel": "web",
+                  "order value": 575.93
+                },
+                {
+                  "channel": "web",
+                  "order value": 151.59
+                },
+                {
+                  "channel": "partner",
+                  "order value": 183.75
+                },
+                {
+                  "channel": "web",
+                  "order value": 469.75
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1304.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 1341.36
+                },
+                {
+                  "channel": "partner",
+                  "order value": 632.77
+                },
+                {
+                  "channel": "partner",
+                  "order value": 63.28
+                },
+                {
+                  "channel": "phone",
+                  "order value": 607.5
+                },
+                {
+                  "channel": "web",
+                  "order value": 1684.05
+                },
+                {
+                  "channel": "web",
+                  "order value": 63.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 368.42
+                },
+                {
+                  "channel": "web",
+                  "order value": 104.79
+                },
+                {
+                  "channel": "web",
+                  "order value": 807.86
+                },
+                {
+                  "channel": "phone",
+                  "order value": 469.81
+                },
+                {
+                  "channel": "web",
+                  "order value": 1276.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 357.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 519.93
+                },
+                {
+                  "channel": "partner",
+                  "order value": 807.36
+                },
+                {
+                  "channel": "partner",
+                  "order value": 91.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 1044.24
+                },
+                {
+                  "channel": "web",
+                  "order value": 2800.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 128.79
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1066.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 499.22
+                },
+                {
+                  "channel": "phone",
+                  "order value": 970.08
+                },
+                {
+                  "channel": "web",
+                  "order value": 771.72
+                },
+                {
+                  "channel": "web",
+                  "order value": 158.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 744.69
+                },
+                {
+                  "channel": "phone",
+                  "order value": 677.82
+                },
+                {
+                  "channel": "web",
+                  "order value": 1772.84
+                },
+                {
+                  "channel": "web",
+                  "order value": 1255.68
+                },
+                {
+                  "channel": "web",
+                  "order value": 1176.48
+                },
+                {
+                  "channel": "phone",
+                  "order value": 2076.45
+                },
+                {
+                  "channel": "web",
+                  "order value": 80.79
+                },
+                {
+                  "channel": "phone",
+                  "order value": 590.4
+                },
+                {
+                  "channel": "phone",
+                  "order value": 597.38
+                },
+                {
+                  "channel": "web",
+                  "order value": 514.92
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1251.61
+                },
+                {
+                  "channel": "web",
+                  "order value": 1269.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 1595.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 251.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 510.51
+                },
+                {
+                  "channel": "web",
+                  "order value": 352.8
+                },
+                {
+                  "channel": "phone",
+                  "order value": 507.5
+                },
+                {
+                  "channel": "web",
+                  "order value": 343.36
+                },
+                {
+                  "channel": "phone",
+                  "order value": 386.42
+                },
+                {
+                  "channel": "web",
+                  "order value": 245.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 62.31
+                },
+                {
+                  "channel": "web",
+                  "order value": 1035.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 160.57
+                },
+                {
+                  "channel": "web",
+                  "order value": 1191.65
+                },
+                {
+                  "channel": "phone",
+                  "order value": 469.75
+                },
+                {
+                  "channel": "web",
+                  "order value": 83.99
+                },
+                {
+                  "channel": "web",
+                  "order value": 463.07
+                },
+                {
+                  "channel": "web",
+                  "order value": 1713.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 747.74
+                },
+                {
+                  "channel": "phone",
+                  "order value": 206.03
+                },
+                {
+                  "channel": "web",
+                  "order value": 304.11
+                },
+                {
+                  "channel": "phone",
+                  "order value": 175.0
+                },
+                {
+                  "channel": "partner",
+                  "order value": 202.7
+                },
+                {
+                  "channel": "web",
+                  "order value": 2493.56
+                },
+                {
+                  "channel": "web",
+                  "order value": 235.44
+                },
+                {
+                  "channel": "phone",
+                  "order value": 138.35
+                },
+                {
+                  "channel": "phone",
+                  "order value": 141.6
+                },
+                {
+                  "channel": "phone",
+                  "order value": 210.91
+                },
+                {
+                  "channel": "partner",
+                  "order value": 187.2
+                },
+                {
+                  "channel": "partner",
+                  "order value": 589.45
+                },
+                {
+                  "channel": "web",
+                  "order value": 158.97
+                },
+                {
+                  "channel": "web",
+                  "order value": 727.2
+                },
+                {
+                  "channel": "phone",
+                  "order value": 888.03
+                },
+                {
+                  "channel": "web",
+                  "order value": 2887.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 1251.61
+                },
+                {
+                  "channel": "web",
+                  "order value": 543.91
+                },
+                {
+                  "channel": "web",
+                  "order value": 157.25
+                },
+                {
+                  "channel": "partner",
+                  "order value": 106.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 834.41
+                },
+                {
+                  "channel": "phone",
+                  "order value": 63.28
+                },
+                {
+                  "channel": "phone",
+                  "order value": 2666.27
+                },
+                {
+                  "channel": "web",
+                  "order value": 170.85
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1239.84
+                },
+                {
+                  "channel": "web",
+                  "order value": 78.99
+                },
+                {
+                  "channel": "web",
+                  "order value": 1414.82
+                },
+                {
+                  "channel": "web",
+                  "order value": 1024.8
+                },
+                {
+                  "channel": "phone",
+                  "order value": 366.12
+                },
+                {
+                  "channel": "web",
+                  "order value": 905.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 1392.11
+                },
+                {
+                  "channel": "web",
+                  "order value": 574.86
+                },
+                {
+                  "channel": "phone",
+                  "order value": 2080.25
+                },
+                {
+                  "channel": "web",
+                  "order value": 424.71
+                },
+                {
+                  "channel": "web",
+                  "order value": 619.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 562.1
+                },
+                {
+                  "channel": "phone",
+                  "order value": 784.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 598.56
+                },
+                {
+                  "channel": "web",
+                  "order value": 834.41
+                },
+                {
+                  "channel": "phone",
+                  "order value": 89.7
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1960.53
+                },
+                {
+                  "channel": "phone",
+                  "order value": 42.0
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1134.69
+                },
+                {
+                  "channel": "web",
+                  "order value": 793.8
+                },
+                {
+                  "channel": "phone",
+                  "order value": 910.98
+                },
+                {
+                  "channel": "phone",
+                  "order value": 138.35
+                },
+                {
+                  "channel": "web",
+                  "order value": 910.87
+                },
+                {
+                  "channel": "web",
+                  "order value": 1384.3
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1297.03
+                },
+                {
+                  "channel": "web",
+                  "order value": 89.46
+                },
+                {
+                  "channel": "web",
+                  "order value": 1618.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 1184.04
+                },
+                {
+                  "channel": "web",
+                  "order value": 553.52
+                },
+                {
+                  "channel": "phone",
+                  "order value": 165.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 483.75
+                },
+                {
+                  "channel": "web",
+                  "order value": 511.58
+                },
+                {
+                  "channel": "web",
+                  "order value": 478.34
+                },
+                {
+                  "channel": "web",
+                  "order value": 242.39
+                },
+                {
+                  "channel": "partner",
+                  "order value": 63.28
+                },
+                {
+                  "channel": "web",
+                  "order value": 1717.5
+                },
+                {
+                  "channel": "web",
+                  "order value": 291.03
+                },
+                {
+                  "channel": "phone",
+                  "order value": 897.84
+                },
+                {
+                  "channel": "web",
+                  "order value": 1119.69
+                },
+                {
+                  "channel": "partner",
+                  "order value": 839.28
+                },
+                {
+                  "channel": "web",
+                  "order value": 1682.4
+                },
+                {
+                  "channel": "phone",
+                  "order value": 69.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 1137.78
+                },
+                {
+                  "channel": "web",
+                  "order value": 738.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 400.25
+                },
+                {
+                  "channel": "web",
+                  "order value": 419.04
+                },
+                {
+                  "channel": "partner",
+                  "order value": 128.62
+                },
+                {
+                  "channel": "phone",
+                  "order value": 86.25
+                },
+                {
+                  "channel": "web",
+                  "order value": 660.66
+                },
+                {
+                  "channel": "web",
+                  "order value": 1100.71
+                },
+                {
+                  "channel": "phone",
+                  "order value": 46.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 47.53
+                },
+                {
+                  "channel": "web",
+                  "order value": 450.45
+                },
+                {
+                  "channel": "web",
+                  "order value": 94.72
+                },
+                {
+                  "channel": "web",
+                  "order value": 2845.83
+                },
+                {
+                  "channel": "web",
+                  "order value": 204.12
+                },
+                {
+                  "channel": "web",
+                  "order value": 138.51
+                },
+                {
+                  "channel": "phone",
+                  "order value": 725.01
+                },
+                {
+                  "channel": "web",
+                  "order value": 1624.1
+                },
+                {
+                  "channel": "web",
+                  "order value": 170.04
+                },
+                {
+                  "channel": "web",
+                  "order value": 622.5
+                },
+                {
+                  "channel": "web",
+                  "order value": 1634.49
+                },
+                {
+                  "channel": "web",
+                  "order value": 760.51
+                },
+                {
+                  "channel": "web",
+                  "order value": 1245.84
+                },
+                {
+                  "channel": "web",
+                  "order value": 412.48
+                },
+                {
+                  "channel": "web",
+                  "order value": 579.88
+                },
+                {
+                  "channel": "phone",
+                  "order value": 429.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 875.7
+                },
+                {
+                  "channel": "web",
+                  "order value": 315.48
+                },
+                {
+                  "channel": "partner",
+                  "order value": 88.16
+                },
+                {
+                  "channel": "phone",
+                  "order value": 90.48
+                },
+                {
+                  "channel": "partner",
+                  "order value": 142.5
+                },
+                {
+                  "channel": "web",
+                  "order value": 135.47
+                },
+                {
+                  "channel": "web",
+                  "order value": 192.93
+                },
+                {
+                  "channel": "partner",
+                  "order value": 960.81
+                },
+                {
+                  "channel": "web",
+                  "order value": 189.83
+                },
+                {
+                  "channel": "phone",
+                  "order value": 91.64
+                },
+                {
+                  "channel": "web",
+                  "order value": 97.05
+                },
+                {
+                  "channel": "phone",
+                  "order value": 331.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 136.54
+                },
+                {
+                  "channel": "web",
+                  "order value": 521.45
+                },
+                {
+                  "channel": "phone",
+                  "order value": 967.98
+                },
+                {
+                  "channel": "web",
+                  "order value": 80.79
+                },
+                {
+                  "channel": "phone",
+                  "order value": 70.8
+                },
+                {
+                  "channel": "phone",
+                  "order value": 31.1
+                },
+                {
+                  "channel": "web",
+                  "order value": 70.1
+                },
+                {
+                  "channel": "web",
+                  "order value": 1110.14
+                },
+                {
+                  "channel": "phone",
+                  "order value": 245.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 765.18
+                },
+                {
+                  "channel": "partner",
+                  "order value": 148.01
+                },
+                {
+                  "channel": "phone",
+                  "order value": 626.86
+                },
+                {
+                  "channel": "web",
+                  "order value": 238.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 403.26
+                },
+                {
+                  "channel": "web",
+                  "order value": 101.19
+                },
+                {
+                  "channel": "web",
+                  "order value": 73.27
+                },
+                {
+                  "channel": "web",
+                  "order value": 420.12
+                },
+                {
+                  "channel": "web",
+                  "order value": 80.79
+                },
+                {
+                  "channel": "partner",
+                  "order value": 213.64
+                },
+                {
+                  "channel": "web",
+                  "order value": 2321.96
+                },
+                {
+                  "channel": "web",
+                  "order value": 80.05
+                },
+                {
+                  "channel": "web",
+                  "order value": 165.6
+                },
+                {
+                  "channel": "phone",
+                  "order value": 41.83
+                },
+                {
+                  "channel": "partner",
+                  "order value": 81.51
+                },
+                {
+                  "channel": "web",
+                  "order value": 789.27
+                },
+                {
+                  "channel": "web",
+                  "order value": 1483.32
+                },
+                {
+                  "channel": "web",
+                  "order value": 1088.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 1842.48
+                },
+                {
+                  "channel": "web",
+                  "order value": 672.46
+                },
+                {
+                  "channel": "web",
+                  "order value": 472.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 814.23
+                },
+                {
+                  "channel": "phone",
+                  "order value": 141.6
+                },
+                {
+                  "channel": "partner",
+                  "order value": 222.01
+                },
+                {
+                  "channel": "phone",
+                  "order value": 202.7
+                },
+                {
+                  "channel": "web",
+                  "order value": 811.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 362.5
+                },
+                {
+                  "channel": "web",
+                  "order value": 71.94
+                },
+                {
+                  "channel": "phone",
+                  "order value": 291.9
+                },
+                {
+                  "channel": "partner",
+                  "order value": 99.85
+                },
+                {
+                  "channel": "web",
+                  "order value": 85.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 405.41
+                },
+                {
+                  "channel": "phone",
+                  "order value": 122.27
+                },
+                {
+                  "channel": "web",
+                  "order value": 1985.2
+                },
+                {
+                  "channel": "partner",
+                  "order value": 708.12
+                },
+                {
+                  "channel": "phone",
+                  "order value": 2007.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 1797.5
+                },
+                {
+                  "channel": "web",
+                  "order value": 589.32
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1537.97
+                },
+                {
+                  "channel": "phone",
+                  "order value": 55.75
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1400.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 589.88
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1134.0
+                },
+                {
+                  "channel": "partner",
+                  "order value": 748.6
+                },
+                {
+                  "channel": "phone",
+                  "order value": 582.55
+                },
+                {
+                  "channel": "web",
+                  "order value": 75.01
+                },
+                {
+                  "channel": "web",
+                  "order value": 160.11
+                },
+                {
+                  "channel": "partner",
+                  "order value": 341.05
+                },
+                {
+                  "channel": "web",
+                  "order value": 192.93
+                },
+                {
+                  "channel": "phone",
+                  "order value": 796.92
+                },
+                {
+                  "channel": "web",
+                  "order value": 292.79
+                },
+                {
+                  "channel": "web",
+                  "order value": 98.88
+                },
+                {
+                  "channel": "web",
+                  "order value": 875.27
+                },
+                {
+                  "channel": "phone",
+                  "order value": 753.97
+                },
+                {
+                  "channel": "web",
+                  "order value": 442.5
+                },
+                {
+                  "channel": "phone",
+                  "order value": 51.45
+                },
+                {
+                  "channel": "web",
+                  "order value": 707.41
+                },
+                {
+                  "channel": "phone",
+                  "order value": 148.01
+                },
+                {
+                  "channel": "web",
+                  "order value": 74.3
+                },
+                {
+                  "channel": "web",
+                  "order value": 2289.72
+                },
+                {
+                  "channel": "web",
+                  "order value": 552.16
+                },
+                {
+                  "channel": "web",
+                  "order value": 1409.27
+                },
+                {
+                  "channel": "web",
+                  "order value": 723.84
+                },
+                {
+                  "channel": "phone",
+                  "order value": 2390.4
+                },
+                {
+                  "channel": "phone",
+                  "order value": 323.64
+                },
+                {
+                  "channel": "web",
+                  "order value": 212.36
+                },
+                {
+                  "channel": "web",
+                  "order value": 566.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 477.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 83.74
+                },
+                {
+                  "channel": "partner",
+                  "order value": 686.51
+                },
+                {
+                  "channel": "web",
+                  "order value": 93.65
+                },
+                {
+                  "channel": "web",
+                  "order value": 323.1
+                },
+                {
+                  "channel": "phone",
+                  "order value": 2088.16
+                },
+                {
+                  "channel": "partner",
+                  "order value": 165.08
+                },
+                {
+                  "channel": "web",
+                  "order value": 563.06
+                },
+                {
+                  "channel": "phone",
+                  "order value": 281.21
+                },
+                {
+                  "channel": "partner",
+                  "order value": 525.6
+                },
+                {
+                  "channel": "phone",
+                  "order value": 438.76
+                },
+                {
+                  "channel": "web",
+                  "order value": 2842.12
+                },
+                {
+                  "channel": "phone",
+                  "order value": 83.66
+                },
+                {
+                  "channel": "phone",
+                  "order value": 375.84
+                },
+                {
+                  "channel": "web",
+                  "order value": 151.59
+                },
+                {
+                  "channel": "phone",
+                  "order value": 284.43
+                },
+                {
+                  "channel": "partner",
+                  "order value": 135.7
+                },
+                {
+                  "channel": "web",
+                  "order value": 62.54
+                },
+                {
+                  "channel": "web",
+                  "order value": 228.52
+                },
+                {
+                  "channel": "web",
+                  "order value": 101.26
+                },
+                {
+                  "channel": "web",
+                  "order value": 1195.56
+                },
+                {
+                  "channel": "web",
+                  "order value": 453.6
+                },
+                {
+                  "channel": "phone",
+                  "order value": 167.31
+                },
+                {
+                  "channel": "web",
+                  "order value": 2352.0
+                },
+                {
+                  "channel": "partner",
+                  "order value": 982.41
+                },
+                {
+                  "channel": "web",
+                  "order value": 259.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 1099.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 169.46
+                },
+                {
+                  "channel": "phone",
+                  "order value": 438.71
+                },
+                {
+                  "channel": "partner",
+                  "order value": 2841.3
+                },
+                {
+                  "channel": "web",
+                  "order value": 49.89
+                },
+                {
+                  "channel": "web",
+                  "order value": 394.38
+                },
+                {
+                  "channel": "web",
+                  "order value": 41.09
+                },
+                {
+                  "channel": "partner",
+                  "order value": 598.63
+                },
+                {
+                  "channel": "phone",
+                  "order value": 573.79
+                },
+                {
+                  "channel": "phone",
+                  "order value": 464.45
+                },
+                {
+                  "channel": "phone",
+                  "order value": 163.02
+                },
+                {
+                  "channel": "web",
+                  "order value": 642.0
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1629.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 450.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 286.57
+                },
+                {
+                  "channel": "web",
+                  "order value": 1004.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 857.85
+                },
+                {
+                  "channel": "web",
+                  "order value": 928.75
+                },
+                {
+                  "channel": "web",
+                  "order value": 614.46
+                },
+                {
+                  "channel": "web",
+                  "order value": 733.8
+                },
+                {
+                  "channel": "phone",
+                  "order value": 350.46
+                },
+                {
+                  "channel": "phone",
+                  "order value": 298.16
+                },
+                {
+                  "channel": "web",
+                  "order value": 270.9
+                },
+                {
+                  "channel": "web",
+                  "order value": 236.0
+                },
+                {
+                  "channel": "phone",
+                  "order value": 2432.88
+                },
+                {
+                  "channel": "partner",
+                  "order value": 140.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 1380.0
+                },
+                {
+                  "channel": "phone",
+                  "order value": 334.62
+                },
+                {
+                  "channel": "phone",
+                  "order value": 572.25
+                },
+                {
+                  "channel": "web",
+                  "order value": 361.39
+                },
+                {
+                  "channel": "web",
+                  "order value": 139.59
+                },
+                {
+                  "channel": "web",
+                  "order value": 253.11
+                },
+                {
+                  "channel": "web",
+                  "order value": 1000.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 466.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 309.6
+                },
+                {
+                  "channel": "partner",
+                  "order value": 197.4
+                },
+                {
+                  "channel": "phone",
+                  "order value": 795.76
+                },
+                {
+                  "channel": "phone",
+                  "order value": 329.75
+                },
+                {
+                  "channel": "web",
+                  "order value": 650.58
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1754.9
+                },
+                {
+                  "channel": "web",
+                  "order value": 1270.91
+                },
+                {
+                  "channel": "web",
+                  "order value": 73.27
+                },
+                {
+                  "channel": "phone",
+                  "order value": 267.05
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1605.53
+                },
+                {
+                  "channel": "web",
+                  "order value": 1142.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 450.44
+                },
+                {
+                  "channel": "phone",
+                  "order value": 946.08
+                },
+                {
+                  "channel": "partner",
+                  "order value": 415.06
+                },
+                {
+                  "channel": "web",
+                  "order value": 136.54
+                },
+                {
+                  "channel": "phone",
+                  "order value": 103.24
+                },
+                {
+                  "channel": "web",
+                  "order value": 440.53
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1102.74
+                },
+                {
+                  "channel": "web",
+                  "order value": 2267.27
+                },
+                {
+                  "channel": "phone",
+                  "order value": 654.33
+                },
+                {
+                  "channel": "web",
+                  "order value": 443.64
+                },
+                {
+                  "channel": "web",
+                  "order value": 1412.48
+                },
+                {
+                  "channel": "phone",
+                  "order value": 424.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 1171.8
+                },
+                {
+                  "channel": "phone",
+                  "order value": 847.04
+                },
+                {
+                  "channel": "web",
+                  "order value": 153.81
+                },
+                {
+                  "channel": "web",
+                  "order value": 254.04
+                },
+                {
+                  "channel": "phone",
+                  "order value": 181.25
+                },
+                {
+                  "channel": "web",
+                  "order value": 128.79
+                },
+                {
+                  "channel": "phone",
+                  "order value": 585.0
+                },
+                {
+                  "channel": "phone",
+                  "order value": 601.68
+                },
+                {
+                  "channel": "web",
+                  "order value": 265.98
+                },
+                {
+                  "channel": "web",
+                  "order value": 1406.1
+                },
+                {
+                  "channel": "partner",
+                  "order value": 505.92
+                },
+                {
+                  "channel": "web",
+                  "order value": 56.79
+                },
+                {
+                  "channel": "phone",
+                  "order value": 392.51
+                },
+                {
+                  "channel": "web",
+                  "order value": 276.22
+                },
+                {
+                  "channel": "phone",
+                  "order value": 219.24
+                },
+                {
+                  "channel": "web",
+                  "order value": 2637.33
+                },
+                {
+                  "channel": "phone",
+                  "order value": 352.8
+                },
+                {
+                  "channel": "partner",
+                  "order value": 2009.58
+                },
+                {
+                  "channel": "web",
+                  "order value": 627.84
+                },
+                {
+                  "channel": "partner",
+                  "order value": 366.24
+                },
+                {
+                  "channel": "web",
+                  "order value": 1670.29
+                },
+                {
+                  "channel": "web",
+                  "order value": 337.84
+                },
+                {
+                  "channel": "phone",
+                  "order value": 607.03
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1671.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 32.79
+                },
+                {
+                  "channel": "web",
+                  "order value": 325.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 41.6
+                },
+                {
+                  "channel": "phone",
+                  "order value": 453.6
+                },
+                {
+                  "channel": "partner",
+                  "order value": 306.12
+                },
+                {
+                  "channel": "web",
+                  "order value": 169.66
+                },
+                {
+                  "channel": "web",
+                  "order value": 1029.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 51.99
+                },
+                {
+                  "channel": "web",
+                  "order value": 698.25
+                },
+                {
+                  "channel": "web",
+                  "order value": 2127.93
+                },
+                {
+                  "channel": "phone",
+                  "order value": 464.4
+                },
+                {
+                  "channel": "partner",
+                  "order value": 405.6
+                },
+                {
+                  "channel": "phone",
+                  "order value": 336.93
+                },
+                {
+                  "channel": "web",
+                  "order value": 1234.17
+                },
+                {
+                  "channel": "partner",
+                  "order value": 226.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 865.51
+                },
+                {
+                  "channel": "web",
+                  "order value": 293.86
+                },
+                {
+                  "channel": "web",
+                  "order value": 2917.5
+                },
+                {
+                  "channel": "web",
+                  "order value": 466.8
+                },
+                {
+                  "channel": "partner",
+                  "order value": 644.96
+                },
+                {
+                  "channel": "web",
+                  "order value": 527.56
+                },
+                {
+                  "channel": "web",
+                  "order value": 82.49
+                },
+                {
+                  "channel": "phone",
+                  "order value": 385.86
+                },
+                {
+                  "channel": "web",
+                  "order value": 85.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 415.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 52.5
+                },
+                {
+                  "channel": "phone",
+                  "order value": 993.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 1044.12
+                },
+                {
+                  "channel": "web",
+                  "order value": 127.59
+                },
+                {
+                  "channel": "web",
+                  "order value": 168.21
+                },
+                {
+                  "channel": "web",
+                  "order value": 1577.86
+                },
+                {
+                  "channel": "web",
+                  "order value": 81.36
+                },
+                {
+                  "channel": "web",
+                  "order value": 51.82
+                },
+                {
+                  "channel": "web",
+                  "order value": 171.24
+                },
+                {
+                  "channel": "web",
+                  "order value": 520.95
+                },
+                {
+                  "channel": "web",
+                  "order value": 2324.21
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1294.92
+                },
+                {
+                  "channel": "web",
+                  "order value": 379.66
+                },
+                {
+                  "channel": "web",
+                  "order value": 729.84
+                },
+                {
+                  "channel": "web",
+                  "order value": 442.08
+                },
+                {
+                  "channel": "web",
+                  "order value": 73.27
+                },
+                {
+                  "channel": "phone",
+                  "order value": 213.43
+                },
+                {
+                  "channel": "web",
+                  "order value": 189.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 882.5
+                },
+                {
+                  "channel": "partner",
+                  "order value": 70.06
+                },
+                {
+                  "channel": "web",
+                  "order value": 832.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 222.01
+                },
+                {
+                  "channel": "web",
+                  "order value": 133.21
+                },
+                {
+                  "channel": "web",
+                  "order value": 331.2
+                },
+                {
+                  "channel": "partner",
+                  "order value": 149.08
+                },
+                {
+                  "channel": "partner",
+                  "order value": 175.25
+                },
+                {
+                  "channel": "web",
+                  "order value": 469.75
+                },
+                {
+                  "channel": "web",
+                  "order value": 2200.34
+                },
+                {
+                  "channel": "web",
+                  "order value": 447.23
+                },
+                {
+                  "channel": "partner",
+                  "order value": 84.73
+                },
+                {
+                  "channel": "web",
+                  "order value": 245.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 544.45
+                },
+                {
+                  "channel": "web",
+                  "order value": 135.47
+                },
+                {
+                  "channel": "web",
+                  "order value": 136.54
+                },
+                {
+                  "channel": "web",
+                  "order value": 1196.91
+                },
+                {
+                  "channel": "web",
+                  "order value": 900.12
+                },
+                {
+                  "channel": "partner",
+                  "order value": 274.92
+                },
+                {
+                  "channel": "web",
+                  "order value": 73.27
+                },
+                {
+                  "channel": "phone",
+                  "order value": 148.01
+                },
+                {
+                  "channel": "web",
+                  "order value": 88.65
+                },
+                {
+                  "channel": "web",
+                  "order value": 1814.4
+                },
+                {
+                  "channel": "phone",
+                  "order value": 250.96
+                },
+                {
+                  "channel": "web",
+                  "order value": 252.58
+                },
+                {
+                  "channel": "phone",
+                  "order value": 409.08
+                },
+                {
+                  "channel": "web",
+                  "order value": 151.59
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1443.58
+                },
+                {
+                  "channel": "partner",
+                  "order value": 511.2
+                },
+                {
+                  "channel": "partner",
+                  "order value": 538.98
+                },
+                {
+                  "channel": "web",
+                  "order value": 51.82
+                },
+                {
+                  "channel": "web",
+                  "order value": 580.22
+                },
+                {
+                  "channel": "web",
+                  "order value": 50.74
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1537.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 247.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 1410.0
+                },
+                {
+                  "channel": "phone",
+                  "order value": 940.8
+                },
+                {
+                  "channel": "phone",
+                  "order value": 235.2
+                },
+                {
+                  "channel": "phone",
+                  "order value": 31.1
+                },
+                {
+                  "channel": "web",
+                  "order value": 619.2
+                },
+                {
+                  "channel": "web",
+                  "order value": 136.54
+                },
+                {
+                  "channel": "web",
+                  "order value": 48.14
+                },
+                {
+                  "channel": "phone",
+                  "order value": 120.23
+                },
+                {
+                  "channel": "web",
+                  "order value": 892.53
+                },
+                {
+                  "channel": "web",
+                  "order value": 846.93
+                },
+                {
+                  "channel": "web",
+                  "order value": 148.34
+                },
+                {
+                  "channel": "phone",
+                  "order value": 123.9
+                },
+                {
+                  "channel": "phone",
+                  "order value": 300.41
+                },
+                {
+                  "channel": "web",
+                  "order value": 955.2
+                },
+                {
+                  "channel": "phone",
+                  "order value": 216.91
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1933.32
+                },
+                {
+                  "channel": "partner",
+                  "order value": 52.55
+                },
+                {
+                  "channel": "web",
+                  "order value": 307.81
+                },
+                {
+                  "channel": "web",
+                  "order value": 1111.11
+                },
+                {
+                  "channel": "web",
+                  "order value": 466.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 765.77
+                },
+                {
+                  "channel": "web",
+                  "order value": 116.79
+                },
+                {
+                  "channel": "phone",
+                  "order value": 752.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 1293.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 32.79
+                },
+                {
+                  "channel": "web",
+                  "order value": 323.73
+                },
+                {
+                  "channel": "web",
+                  "order value": 441.18
+                },
+                {
+                  "channel": "web",
+                  "order value": 1061.39
+                },
+                {
+                  "channel": "web",
+                  "order value": 572.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 351.78
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1013.51
+                },
+                {
+                  "channel": "phone",
+                  "order value": 619.2
+                },
+                {
+                  "channel": "phone",
+                  "order value": 333.75
+                },
+                {
+                  "channel": "phone",
+                  "order value": 664.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 483.75
+                },
+                {
+                  "channel": "web",
+                  "order value": 607.13
+                },
+                {
+                  "channel": "web",
+                  "order value": 987.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 363.74
+                },
+                {
+                  "channel": "phone",
+                  "order value": 255.25
+                },
+                {
+                  "channel": "web",
+                  "order value": 163.59
+                },
+                {
+                  "channel": "phone",
+                  "order value": 20.71
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1708.92
+                },
+                {
+                  "channel": "partner",
+                  "order value": 166.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 427.44
+                },
+                {
+                  "channel": "partner",
+                  "order value": 446.16
+                },
+                {
+                  "channel": "phone",
+                  "order value": 85.02
+                },
+                {
+                  "channel": "web",
+                  "order value": 519.68
+                },
+                {
+                  "channel": "web",
+                  "order value": 977.73
+                },
+                {
+                  "channel": "web",
+                  "order value": 960.2
+                },
+                {
+                  "channel": "phone",
+                  "order value": 375.18
+                },
+                {
+                  "channel": "web",
+                  "order value": 149.19
+                },
+                {
+                  "channel": "phone",
+                  "order value": 371.09
+                },
+                {
+                  "channel": "partner",
+                  "order value": 52.55
+                },
+                {
+                  "channel": "web",
+                  "order value": 2076.16
+                },
+                {
+                  "channel": "phone",
+                  "order value": 274.8
+                },
+                {
+                  "channel": "web",
+                  "order value": 2397.04
+                },
+                {
+                  "channel": "phone",
+                  "order value": 31.1
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1067.14
+                },
+                {
+                  "channel": "phone",
+                  "order value": 322.5
+                },
+                {
+                  "channel": "web",
+                  "order value": 375.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 226.4
+                },
+                {
+                  "channel": "phone",
+                  "order value": 84.0
+                },
+                {
+                  "channel": "phone",
+                  "order value": 68.4
+                },
+                {
+                  "channel": "web",
+                  "order value": 80.79
+                },
+                {
+                  "channel": "phone",
+                  "order value": 920.2
+                },
+                {
+                  "channel": "phone",
+                  "order value": 135.45
+                },
+                {
+                  "channel": "phone",
+                  "order value": 920.2
+                },
+                {
+                  "channel": "phone",
+                  "order value": 189.83
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1170.44
+                },
+                {
+                  "channel": "phone",
+                  "order value": 981.34
+                },
+                {
+                  "channel": "web",
+                  "order value": 1251.32
+                },
+                {
+                  "channel": "web",
+                  "order value": 1430.5
+                },
+                {
+                  "channel": "phone",
+                  "order value": 22.8
+                },
+                {
+                  "channel": "partner",
+                  "order value": 882.36
+                },
+                {
+                  "channel": "web",
+                  "order value": 780.44
+                },
+                {
+                  "channel": "web",
+                  "order value": 368.42
+                },
+                {
+                  "channel": "web",
+                  "order value": 638.73
+                },
+                {
+                  "channel": "web",
+                  "order value": 414.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 418.8
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1291.56
+                },
+                {
+                  "channel": "web",
+                  "order value": 390.22
+                },
+                {
+                  "channel": "web",
+                  "order value": 411.65
+                },
+                {
+                  "channel": "web",
+                  "order value": 2522.98
+                },
+                {
+                  "channel": "web",
+                  "order value": 185.85
+                },
+                {
+                  "channel": "web",
+                  "order value": 545.44
+                },
+                {
+                  "channel": "phone",
+                  "order value": 237.0
+                },
+                {
+                  "channel": "phone",
+                  "order value": 56.84
+                },
+                {
+                  "channel": "web",
+                  "order value": 2760.62
+                },
+                {
+                  "channel": "phone",
+                  "order value": 667.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 175.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 609.18
+                },
+                {
+                  "channel": "phone",
+                  "order value": 592.02
+                },
+                {
+                  "channel": "phone",
+                  "order value": 264.42
+                },
+                {
+                  "channel": "web",
+                  "order value": 233.31
+                },
+                {
+                  "channel": "web",
+                  "order value": 696.48
+                },
+                {
+                  "channel": "phone",
+                  "order value": 1421.0
+                },
+                {
+                  "channel": "phone",
+                  "order value": 265.12
+                },
+                {
+                  "channel": "partner",
+                  "order value": 140.61
+                },
+                {
+                  "channel": "partner",
+                  "order value": 736.81
+                },
+                {
+                  "channel": "web",
+                  "order value": 145.69
+                },
+                {
+                  "channel": "web",
+                  "order value": 205.0
+                },
+                {
+                  "channel": "web",
+                  "order value": 276.7
+                },
+                {
+                  "channel": "web",
+                  "order value": 221.95
+                },
+                {
+                  "channel": "web",
+                  "order value": 62.54
+                },
+                {
+                  "channel": "phone",
+                  "order value": 213.6
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1726.83
+                },
+                {
+                  "channel": "phone",
+                  "order value": 76.3
+                },
+                {
+                  "channel": "web",
+                  "order value": 484.98
+                },
+                {
+                  "channel": "web",
+                  "order value": 343.79
+                },
+                {
+                  "channel": "web",
+                  "order value": 127.7
+                },
+                {
+                  "channel": "phone",
+                  "order value": 656.37
+                },
+                {
+                  "channel": "partner",
+                  "order value": 598.45
+                },
+                {
+                  "channel": "web",
+                  "order value": 1085.64
+                },
+                {
+                  "channel": "web",
+                  "order value": 1491.6
+                },
+                {
+                  "channel": "phone",
+                  "order value": 550.19
+                },
+                {
+                  "channel": "phone",
+                  "order value": 157.66
+                },
+                {
+                  "channel": "phone",
+                  "order value": 998.44
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1312.95
+                },
+                {
+                  "channel": "partner",
+                  "order value": 988.19
+                },
+                {
+                  "channel": "web",
+                  "order value": 80.79
+                },
+                {
+                  "channel": "web",
+                  "order value": 147.27
+                },
+                {
+                  "channel": "web",
+                  "order value": 344.52
+                },
+                {
+                  "channel": "web",
+                  "order value": 301.16
+                },
+                {
+                  "channel": "phone",
+                  "order value": 235.41
+                },
+                {
+                  "channel": "web",
+                  "order value": 2175.03
+                },
+                {
+                  "channel": "phone",
+                  "order value": 270.32
+                },
+                {
+                  "channel": "web",
+                  "order value": 2166.45
+                },
+                {
+                  "channel": "web",
+                  "order value": 461.07
+                },
+                {
+                  "channel": "web",
+                  "order value": 168.38
+                },
+                {
+                  "channel": "web",
+                  "order value": 618.14
+                },
+                {
+                  "channel": "web",
+                  "order value": 2029.6
+                },
+                {
+                  "channel": "web",
+                  "order value": 810.81
+                },
+                {
+                  "channel": "partner",
+                  "order value": 279.3
+                },
+                {
+                  "channel": "web",
+                  "order value": 2088.16
+                },
+                {
+                  "channel": "web",
+                  "order value": 274.8
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1977.72
+                },
+                {
+                  "channel": "phone",
+                  "order value": 309.6
+                },
+                {
+                  "channel": "partner",
+                  "order value": 263.35
+                },
+                {
+                  "channel": "web",
+                  "order value": 1212.24
+                },
+                {
+                  "channel": "web",
+                  "order value": 83.99
+                },
+                {
+                  "channel": "phone",
+                  "order value": 292.85
+                },
+                {
+                  "channel": "partner",
+                  "order value": 447.23
+                },
+                {
+                  "channel": "partner",
+                  "order value": 479.41
+                },
+                {
+                  "channel": "web",
+                  "order value": 151.59
+                },
+                {
+                  "channel": "partner",
+                  "order value": 1759.49
+                },
+                {
+                  "channel": "web",
+                  "order value": 1529.39
+                },
+                {
+                  "channel": "web",
+                  "order value": 995.17
+                },
+                {
+                  "channel": "web",
+                  "order value": 2490.0
+                }
+              ]
+            },
+            "mark": {
+              "type": "bar",
+              "tooltip": true
+            },
+            "encoding": {
+              "x": {
+                "field": "order value",
+                "type": "quantitative",
+                "title": "Order value",
+                "bin": {
+                  "maxbins": 20
+                }
+              },
+              "y": {
+                "aggregate": "count",
+                "type": "quantitative",
+                "title": "Rows"
+              }
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "histogram",
+                "orientation": "auto",
+                "stack": "stacked",
+                "categories": 519
+              }
+            }
+          },
+          "chart_source": "model",
+          "chart_note": null,
+          "kpi": null,
+          "error": null
+        }
+      },
+      {
+        "title": "Customers and service",
+        "tile_type": "TEXT",
+        "question": "Who is arriving and what happens after the order: new customers each month, the share of orders sent back and why, how long a delivery takes door to door, and what the support queue looked like while it did.",
+        "sql": "",
+        "sql_origin": "HANDWRITTEN",
+        "chart_config": null,
+        "table_config": null,
+        "grid_x": 0,
+        "grid_y": 41,
+        "grid_w": 12,
+        "grid_h": 2,
+        "position": 14,
+        "result": null
+      },
+      {
+        "title": "New customers",
+        "tile_type": "METRIC",
+        "question": "New customers per month",
+        "sql": "SELECT CAST(DATE_TRUNC('MONTH', c.signed_up_at) AS DATE) AS month, COUNT(*) AS \"signed up this month\" FROM public.customers AS c WHERE NOT c.is_deleted AND c.signed_up_at >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND c.signed_up_at < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY 1 ORDER BY 1 LIMIT 1000",
+        "sql_origin": "GENERATED",
+        "chart_config": null,
+        "table_config": null,
+        "grid_x": 0,
+        "grid_y": 43,
+        "grid_w": 4,
+        "grid_h": 3,
+        "position": 15,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "month",
+              "db_type": "date",
+              "semantic_type": "temporal"
+            },
+            {
+              "name": "signed up this month",
+              "db_type": "bigint",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "2025-09-01",
+              30
+            ],
+            [
+              "2025-10-01",
+              23
+            ],
+            [
+              "2025-11-01",
+              34
+            ],
+            [
+              "2025-12-01",
+              31
+            ],
+            [
+              "2026-01-01",
+              33
+            ],
+            [
+              "2026-02-01",
+              21
+            ],
+            [
+              "2026-03-01",
+              26
+            ],
+            [
+              "2026-04-01",
+              41
+            ],
+            [
+              "2026-05-01",
+              38
+            ],
+            [
+              "2026-06-01",
+              52
+            ],
+            [
+              "2026-07-01",
+              32
+            ],
+            [
+              "2026-08-01",
+              27
+            ]
+          ],
+          "row_count": 12,
+          "truncated": false,
+          "duration_ms": 6,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "month": "2025-09-01",
+                  "signed up this month": 30
+                },
+                {
+                  "month": "2025-10-01",
+                  "signed up this month": 23
+                },
+                {
+                  "month": "2025-11-01",
+                  "signed up this month": 34
+                },
+                {
+                  "month": "2025-12-01",
+                  "signed up this month": 31
+                },
+                {
+                  "month": "2026-01-01",
+                  "signed up this month": 33
+                },
+                {
+                  "month": "2026-02-01",
+                  "signed up this month": 21
+                },
+                {
+                  "month": "2026-03-01",
+                  "signed up this month": 26
+                },
+                {
+                  "month": "2026-04-01",
+                  "signed up this month": 41
+                },
+                {
+                  "month": "2026-05-01",
+                  "signed up this month": 38
+                },
+                {
+                  "month": "2026-06-01",
+                  "signed up this month": 52
+                },
+                {
+                  "month": "2026-07-01",
+                  "signed up this month": 32
+                },
+                {
+                  "month": "2026-08-01",
+                  "signed up this month": 27
+                }
+              ]
+            },
+            "mark": {
+              "type": "line"
+            },
+            "encoding": {
+              "x": {
+                "field": "month",
+                "type": "temporal"
+              },
+              "y": {
+                "field": "signed up this month",
+                "type": "quantitative"
+              },
+              "tooltip": [
+                {
+                  "field": "month",
+                  "type": "temporal"
+                },
+                {
+                  "field": "signed up this month",
+                  "type": "quantitative",
+                  "format": ","
+                }
+              ]
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "line",
+                "orientation": "auto",
+                "stack": "stacked",
+                "categories": 12
               }
             }
           },
           "chart_source": "heuristic",
           "chart_note": null,
-          "kpi": null,
+          "kpi": {
+            "value": "27",
+            "raw": 27.0,
+            "label": "signed up this month",
+            "caption": null,
+            "delta": {
+              "text": "-15.6%",
+              "direction": "down",
+              "caption": "vs 2026-07-01"
+            },
+            "sparkline": [
+              30.0,
+              23.0,
+              34.0,
+              31.0,
+              33.0,
+              21.0,
+              26.0,
+              41.0,
+              38.0,
+              52.0,
+              32.0,
+              27.0
+            ]
+          },
+          "error": null
+        }
+      },
+      {
+        "title": "Return rate",
+        "tile_type": "METRIC",
+        "question": "What share of each month's orders was returned?",
+        "sql": "SELECT CAST(DATE_TRUNC('MONTH', o.order_date) AS DATE) AS month, ROUND(CAST(100.0 * COUNT(*) FILTER(WHERE o.status = 'returned') / COUNT(*) AS DECIMAL), 2) AS \"returned %\" FROM public.orders AS o WHERE o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY 1 ORDER BY 1 LIMIT 1000",
+        "sql_origin": "GENERATED",
+        "chart_config": null,
+        "table_config": null,
+        "grid_x": 4,
+        "grid_y": 43,
+        "grid_w": 4,
+        "grid_h": 3,
+        "position": 16,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "month",
+              "db_type": "date",
+              "semantic_type": "temporal"
+            },
+            {
+              "name": "returned %",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "2025-09-01",
+              2.94
+            ],
+            [
+              "2025-10-01",
+              2.58
+            ],
+            [
+              "2025-11-01",
+              2.42
+            ],
+            [
+              "2025-12-01",
+              3.62
+            ],
+            [
+              "2026-01-01",
+              3.94
+            ],
+            [
+              "2026-02-01",
+              4.31
+            ],
+            [
+              "2026-03-01",
+              3.63
+            ],
+            [
+              "2026-04-01",
+              4.53
+            ],
+            [
+              "2026-05-01",
+              3.52
+            ],
+            [
+              "2026-06-01",
+              4.76
+            ],
+            [
+              "2026-07-01",
+              3.67
+            ],
+            [
+              "2026-08-01",
+              4.54
+            ]
+          ],
+          "row_count": 12,
+          "truncated": false,
+          "duration_ms": 29,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "month": "2025-09-01",
+                  "returned %": 2.94
+                },
+                {
+                  "month": "2025-10-01",
+                  "returned %": 2.58
+                },
+                {
+                  "month": "2025-11-01",
+                  "returned %": 2.42
+                },
+                {
+                  "month": "2025-12-01",
+                  "returned %": 3.62
+                },
+                {
+                  "month": "2026-01-01",
+                  "returned %": 3.94
+                },
+                {
+                  "month": "2026-02-01",
+                  "returned %": 4.31
+                },
+                {
+                  "month": "2026-03-01",
+                  "returned %": 3.63
+                },
+                {
+                  "month": "2026-04-01",
+                  "returned %": 4.53
+                },
+                {
+                  "month": "2026-05-01",
+                  "returned %": 3.52
+                },
+                {
+                  "month": "2026-06-01",
+                  "returned %": 4.76
+                },
+                {
+                  "month": "2026-07-01",
+                  "returned %": 3.67
+                },
+                {
+                  "month": "2026-08-01",
+                  "returned %": 4.54
+                }
+              ]
+            },
+            "mark": {
+              "type": "line"
+            },
+            "encoding": {
+              "x": {
+                "field": "month",
+                "type": "temporal"
+              },
+              "y": {
+                "field": "returned %",
+                "type": "quantitative"
+              },
+              "tooltip": [
+                {
+                  "field": "month",
+                  "type": "temporal"
+                },
+                {
+                  "field": "returned %",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                }
+              ]
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "line",
+                "orientation": "auto",
+                "stack": "stacked",
+                "categories": 12
+              }
+            }
+          },
+          "chart_source": "heuristic",
+          "chart_note": null,
+          "kpi": {
+            "value": "4.54",
+            "raw": 4.54,
+            "label": "returned %",
+            "caption": null,
+            "delta": {
+              "text": "+23.7%",
+              "direction": "up",
+              "caption": "vs 2026-07-01"
+            },
+            "sparkline": [
+              2.94,
+              2.58,
+              2.42,
+              3.62,
+              3.94,
+              4.31,
+              3.63,
+              4.53,
+              3.52,
+              4.76,
+              3.67,
+              4.54
+            ]
+          },
+          "error": null
+        }
+      },
+      {
+        "title": "Days to deliver",
+        "tile_type": "METRIC",
+        "question": "Average days from shipping to delivery, per month",
+        "sql": "SELECT CAST(DATE_TRUNC('MONTH', s.shipped_at) AS DATE) AS month, ROUND(CAST(AVG(CAST(s.delivered_at AS DATE) - CAST(s.shipped_at AS DATE)) AS DECIMAL), 2) AS \"days in transit\" FROM public.shipments AS s WHERE s.delivered_at IS NOT NULL AND s.shipped_at >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND s.shipped_at < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY 1 ORDER BY 1 LIMIT 1000",
+        "sql_origin": "GENERATED",
+        "chart_config": null,
+        "table_config": null,
+        "grid_x": 8,
+        "grid_y": 43,
+        "grid_w": 4,
+        "grid_h": 3,
+        "position": 17,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "month",
+              "db_type": "date",
+              "semantic_type": "temporal"
+            },
+            {
+              "name": "days in transit",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "2025-09-01",
+              3.46
+            ],
+            [
+              "2025-10-01",
+              3.43
+            ],
+            [
+              "2025-11-01",
+              3.5
+            ],
+            [
+              "2025-12-01",
+              3.52
+            ],
+            [
+              "2026-01-01",
+              3.47
+            ],
+            [
+              "2026-02-01",
+              3.51
+            ],
+            [
+              "2026-03-01",
+              3.54
+            ],
+            [
+              "2026-04-01",
+              3.58
+            ],
+            [
+              "2026-05-01",
+              3.45
+            ],
+            [
+              "2026-06-01",
+              3.47
+            ],
+            [
+              "2026-07-01",
+              3.52
+            ],
+            [
+              "2026-08-01",
+              3.6
+            ]
+          ],
+          "row_count": 12,
+          "truncated": false,
+          "duration_ms": 29,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "month": "2025-09-01",
+                  "days in transit": 3.46
+                },
+                {
+                  "month": "2025-10-01",
+                  "days in transit": 3.43
+                },
+                {
+                  "month": "2025-11-01",
+                  "days in transit": 3.5
+                },
+                {
+                  "month": "2025-12-01",
+                  "days in transit": 3.52
+                },
+                {
+                  "month": "2026-01-01",
+                  "days in transit": 3.47
+                },
+                {
+                  "month": "2026-02-01",
+                  "days in transit": 3.51
+                },
+                {
+                  "month": "2026-03-01",
+                  "days in transit": 3.54
+                },
+                {
+                  "month": "2026-04-01",
+                  "days in transit": 3.58
+                },
+                {
+                  "month": "2026-05-01",
+                  "days in transit": 3.45
+                },
+                {
+                  "month": "2026-06-01",
+                  "days in transit": 3.47
+                },
+                {
+                  "month": "2026-07-01",
+                  "days in transit": 3.52
+                },
+                {
+                  "month": "2026-08-01",
+                  "days in transit": 3.6
+                }
+              ]
+            },
+            "mark": {
+              "type": "line"
+            },
+            "encoding": {
+              "x": {
+                "field": "month",
+                "type": "temporal"
+              },
+              "y": {
+                "field": "days in transit",
+                "type": "quantitative"
+              },
+              "tooltip": [
+                {
+                  "field": "month",
+                  "type": "temporal"
+                },
+                {
+                  "field": "days in transit",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                }
+              ]
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "line",
+                "orientation": "auto",
+                "stack": "stacked",
+                "categories": 12
+              }
+            }
+          },
+          "chart_source": "heuristic",
+          "chart_note": null,
+          "kpi": {
+            "value": "3.60",
+            "raw": 3.6,
+            "label": "days in transit",
+            "caption": null,
+            "delta": {
+              "text": "+2.3%",
+              "direction": "up",
+              "caption": "vs 2026-07-01"
+            },
+            "sparkline": [
+              3.46,
+              3.43,
+              3.5,
+              3.52,
+              3.47,
+              3.51,
+              3.54,
+              3.58,
+              3.45,
+              3.47,
+              3.52,
+              3.6
+            ]
+          },
           "error": null
         }
       },
@@ -2743,11 +9221,11 @@ export const BOARDS: ScriptedBoard[] = [
           }
         },
         "table_config": null,
-        "grid_x": 7,
-        "grid_y": 30,
-        "grid_w": 5,
-        "grid_h": 4,
-        "position": 12,
+        "grid_x": 0,
+        "grid_y": 46,
+        "grid_w": 6,
+        "grid_h": 7,
+        "position": 18,
         "result": {
           "status": "OK",
           "columns": [
@@ -2782,7 +9260,7 @@ export const BOARDS: ScriptedBoard[] = [
           ],
           "row_count": 4,
           "truncated": false,
-          "duration_ms": 2,
+          "duration_ms": 4,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
@@ -2848,209 +9326,585 @@ export const BOARDS: ScriptedBoard[] = [
         }
       },
       {
-        "title": "Fulfilment",
-        "tile_type": "TEXT",
-        "question": "How orders reach customers: how many deliveries each carrier made over the last six months and how long they took door to door, and which stock is at or below the level it is reordered at.",
-        "sql": "",
-        "sql_origin": "HANDWRITTEN",
-        "chart_config": null,
-        "table_config": null,
-        "grid_x": 0,
-        "grid_y": 34,
-        "grid_w": 12,
-        "grid_h": 2,
-        "position": 13,
-        "result": null
-      },
-      {
-        "title": "Carriers: volume and speed",
+        "title": "Tickets opened by month",
         "tile_type": "CHART",
-        "question": "Deliveries and average days from shipping to delivery, by carrier",
-        "sql": "SELECT ca.name AS carrier, COUNT(*) AS deliveries, ROUND(CAST(AVG(EXTRACT(EPOCH FROM (s.delivered_at - s.shipped_at)) / 86400) AS DECIMAL), 1) AS avg_days FROM public.shipments AS s JOIN public.carriers AS ca ON ca.id = s.carrier_id WHERE s.delivered_at IS NOT NULL AND s.shipped_at >= CURRENT_DATE - INTERVAL '6 MONTHS' GROUP BY ca.name ORDER BY deliveries DESC LIMIT 1000",
+        "question": "Support tickets opened each month, by priority",
+        "sql": "SELECT CAST(DATE_TRUNC('MONTH', t.opened_at) AS DATE) AS month, t.priority, COUNT(*) AS tickets FROM public.support_tickets AS t WHERE t.opened_at >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND t.opened_at < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY 1, 2 ORDER BY 1, 2 LIMIT 1000",
         "sql_origin": "GENERATED",
         "chart_config": {
-          "chart_type": "combo",
+          "chart_type": "line",
           "x_axis": {
-            "field": "carrier",
-            "type": "nominal",
-            "label": "Carrier"
+            "field": "month",
+            "type": "temporal",
+            "label": "Month"
           },
           "y_axis": {
-            "field": "deliveries",
+            "field": "tickets",
             "type": "quantitative",
-            "label": "Deliveries",
+            "label": "Tickets",
             "aggregation": "none"
           },
-          "y2_axis": {
-            "field": "avg_days",
-            "type": "quantitative",
-            "label": "Average days",
-            "aggregation": "none"
+          "series": {
+            "field": "priority",
+            "type": "nominal"
           }
         },
         "table_config": null,
-        "grid_x": 0,
-        "grid_y": 36,
-        "grid_w": 5,
+        "grid_x": 6,
+        "grid_y": 46,
+        "grid_w": 6,
         "grid_h": 7,
-        "position": 14,
+        "position": 19,
         "result": {
           "status": "OK",
           "columns": [
             {
-              "name": "carrier",
+              "name": "month",
+              "db_type": "date",
+              "semantic_type": "temporal"
+            },
+            {
+              "name": "priority",
               "db_type": "text",
               "semantic_type": "nominal"
             },
             {
-              "name": "deliveries",
+              "name": "tickets",
               "db_type": "bigint",
-              "semantic_type": "quantitative"
-            },
-            {
-              "name": "avg_days",
-              "db_type": "numeric",
               "semantic_type": "quantitative"
             }
           ],
           "rows": [
             [
-              "DHL",
-              1166,
-              3.5
+              "2025-09-01",
+              "high",
+              14
             ],
             [
-              "UPS",
-              1025,
-              3.5
+              "2025-09-01",
+              "low",
+              10
             ],
             [
-              "FedEx",
-              888,
-              3.5
+              "2025-09-01",
+              "normal",
+              23
             ],
             [
-              "USPS",
-              486,
-              3.6
+              "2025-09-01",
+              "urgent",
+              3
             ],
             [
-              "Aramex",
-              145,
-              3.5
+              "2025-10-01",
+              "high",
+              12
             ],
             [
-              "Local Courier",
-              111,
-              3.4
+              "2025-10-01",
+              "low",
+              12
+            ],
+            [
+              "2025-10-01",
+              "normal",
+              34
+            ],
+            [
+              "2025-10-01",
+              "urgent",
+              2
+            ],
+            [
+              "2025-11-01",
+              "high",
+              11
+            ],
+            [
+              "2025-11-01",
+              "low",
+              15
+            ],
+            [
+              "2025-11-01",
+              "normal",
+              45
+            ],
+            [
+              "2025-11-01",
+              "urgent",
+              1
+            ],
+            [
+              "2025-12-01",
+              "high",
+              14
+            ],
+            [
+              "2025-12-01",
+              "low",
+              14
+            ],
+            [
+              "2025-12-01",
+              "normal",
+              44
+            ],
+            [
+              "2025-12-01",
+              "urgent",
+              4
+            ],
+            [
+              "2026-01-01",
+              "high",
+              16
+            ],
+            [
+              "2026-01-01",
+              "low",
+              21
+            ],
+            [
+              "2026-01-01",
+              "normal",
+              28
+            ],
+            [
+              "2026-01-01",
+              "urgent",
+              4
+            ],
+            [
+              "2026-02-01",
+              "high",
+              8
+            ],
+            [
+              "2026-02-01",
+              "low",
+              11
+            ],
+            [
+              "2026-02-01",
+              "normal",
+              28
+            ],
+            [
+              "2026-02-01",
+              "urgent",
+              3
+            ],
+            [
+              "2026-03-01",
+              "high",
+              15
+            ],
+            [
+              "2026-03-01",
+              "low",
+              13
+            ],
+            [
+              "2026-03-01",
+              "normal",
+              24
+            ],
+            [
+              "2026-03-01",
+              "urgent",
+              2
+            ],
+            [
+              "2026-04-01",
+              "high",
+              13
+            ],
+            [
+              "2026-04-01",
+              "low",
+              13
+            ],
+            [
+              "2026-04-01",
+              "normal",
+              29
+            ],
+            [
+              "2026-04-01",
+              "urgent",
+              2
+            ],
+            [
+              "2026-05-01",
+              "high",
+              12
+            ],
+            [
+              "2026-05-01",
+              "low",
+              19
+            ],
+            [
+              "2026-05-01",
+              "normal",
+              30
+            ],
+            [
+              "2026-05-01",
+              "urgent",
+              3
+            ],
+            [
+              "2026-06-01",
+              "high",
+              20
+            ],
+            [
+              "2026-06-01",
+              "low",
+              11
+            ],
+            [
+              "2026-06-01",
+              "normal",
+              37
+            ],
+            [
+              "2026-06-01",
+              "urgent",
+              2
+            ],
+            [
+              "2026-07-01",
+              "high",
+              12
+            ],
+            [
+              "2026-07-01",
+              "low",
+              17
+            ],
+            [
+              "2026-07-01",
+              "normal",
+              42
+            ],
+            [
+              "2026-07-01",
+              "urgent",
+              5
+            ],
+            [
+              "2026-08-01",
+              "high",
+              16
+            ],
+            [
+              "2026-08-01",
+              "low",
+              13
+            ],
+            [
+              "2026-08-01",
+              "normal",
+              38
+            ],
+            [
+              "2026-08-01",
+              "urgent",
+              3
             ]
           ],
-          "row_count": 6,
+          "row_count": 48,
           "truncated": false,
-          "duration_ms": 6,
+          "duration_ms": 5,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
               "values": [
                 {
-                  "carrier": "DHL",
-                  "deliveries": 1166,
-                  "avg_days": 3.5
+                  "month": "2025-09-01",
+                  "priority": "high",
+                  "tickets": 14
                 },
                 {
-                  "carrier": "UPS",
-                  "deliveries": 1025,
-                  "avg_days": 3.5
+                  "month": "2025-09-01",
+                  "priority": "low",
+                  "tickets": 10
                 },
                 {
-                  "carrier": "FedEx",
-                  "deliveries": 888,
-                  "avg_days": 3.5
+                  "month": "2025-09-01",
+                  "priority": "normal",
+                  "tickets": 23
                 },
                 {
-                  "carrier": "USPS",
-                  "deliveries": 486,
-                  "avg_days": 3.6
+                  "month": "2025-09-01",
+                  "priority": "urgent",
+                  "tickets": 3
                 },
                 {
-                  "carrier": "Aramex",
-                  "deliveries": 145,
-                  "avg_days": 3.5
+                  "month": "2025-10-01",
+                  "priority": "high",
+                  "tickets": 12
                 },
                 {
-                  "carrier": "Local Courier",
-                  "deliveries": 111,
-                  "avg_days": 3.4
+                  "month": "2025-10-01",
+                  "priority": "low",
+                  "tickets": 12
+                },
+                {
+                  "month": "2025-10-01",
+                  "priority": "normal",
+                  "tickets": 34
+                },
+                {
+                  "month": "2025-10-01",
+                  "priority": "urgent",
+                  "tickets": 2
+                },
+                {
+                  "month": "2025-11-01",
+                  "priority": "high",
+                  "tickets": 11
+                },
+                {
+                  "month": "2025-11-01",
+                  "priority": "low",
+                  "tickets": 15
+                },
+                {
+                  "month": "2025-11-01",
+                  "priority": "normal",
+                  "tickets": 45
+                },
+                {
+                  "month": "2025-11-01",
+                  "priority": "urgent",
+                  "tickets": 1
+                },
+                {
+                  "month": "2025-12-01",
+                  "priority": "high",
+                  "tickets": 14
+                },
+                {
+                  "month": "2025-12-01",
+                  "priority": "low",
+                  "tickets": 14
+                },
+                {
+                  "month": "2025-12-01",
+                  "priority": "normal",
+                  "tickets": 44
+                },
+                {
+                  "month": "2025-12-01",
+                  "priority": "urgent",
+                  "tickets": 4
+                },
+                {
+                  "month": "2026-01-01",
+                  "priority": "high",
+                  "tickets": 16
+                },
+                {
+                  "month": "2026-01-01",
+                  "priority": "low",
+                  "tickets": 21
+                },
+                {
+                  "month": "2026-01-01",
+                  "priority": "normal",
+                  "tickets": 28
+                },
+                {
+                  "month": "2026-01-01",
+                  "priority": "urgent",
+                  "tickets": 4
+                },
+                {
+                  "month": "2026-02-01",
+                  "priority": "high",
+                  "tickets": 8
+                },
+                {
+                  "month": "2026-02-01",
+                  "priority": "low",
+                  "tickets": 11
+                },
+                {
+                  "month": "2026-02-01",
+                  "priority": "normal",
+                  "tickets": 28
+                },
+                {
+                  "month": "2026-02-01",
+                  "priority": "urgent",
+                  "tickets": 3
+                },
+                {
+                  "month": "2026-03-01",
+                  "priority": "high",
+                  "tickets": 15
+                },
+                {
+                  "month": "2026-03-01",
+                  "priority": "low",
+                  "tickets": 13
+                },
+                {
+                  "month": "2026-03-01",
+                  "priority": "normal",
+                  "tickets": 24
+                },
+                {
+                  "month": "2026-03-01",
+                  "priority": "urgent",
+                  "tickets": 2
+                },
+                {
+                  "month": "2026-04-01",
+                  "priority": "high",
+                  "tickets": 13
+                },
+                {
+                  "month": "2026-04-01",
+                  "priority": "low",
+                  "tickets": 13
+                },
+                {
+                  "month": "2026-04-01",
+                  "priority": "normal",
+                  "tickets": 29
+                },
+                {
+                  "month": "2026-04-01",
+                  "priority": "urgent",
+                  "tickets": 2
+                },
+                {
+                  "month": "2026-05-01",
+                  "priority": "high",
+                  "tickets": 12
+                },
+                {
+                  "month": "2026-05-01",
+                  "priority": "low",
+                  "tickets": 19
+                },
+                {
+                  "month": "2026-05-01",
+                  "priority": "normal",
+                  "tickets": 30
+                },
+                {
+                  "month": "2026-05-01",
+                  "priority": "urgent",
+                  "tickets": 3
+                },
+                {
+                  "month": "2026-06-01",
+                  "priority": "high",
+                  "tickets": 20
+                },
+                {
+                  "month": "2026-06-01",
+                  "priority": "low",
+                  "tickets": 11
+                },
+                {
+                  "month": "2026-06-01",
+                  "priority": "normal",
+                  "tickets": 37
+                },
+                {
+                  "month": "2026-06-01",
+                  "priority": "urgent",
+                  "tickets": 2
+                },
+                {
+                  "month": "2026-07-01",
+                  "priority": "high",
+                  "tickets": 12
+                },
+                {
+                  "month": "2026-07-01",
+                  "priority": "low",
+                  "tickets": 17
+                },
+                {
+                  "month": "2026-07-01",
+                  "priority": "normal",
+                  "tickets": 42
+                },
+                {
+                  "month": "2026-07-01",
+                  "priority": "urgent",
+                  "tickets": 5
+                },
+                {
+                  "month": "2026-08-01",
+                  "priority": "high",
+                  "tickets": 16
+                },
+                {
+                  "month": "2026-08-01",
+                  "priority": "low",
+                  "tickets": 13
+                },
+                {
+                  "month": "2026-08-01",
+                  "priority": "normal",
+                  "tickets": 38
+                },
+                {
+                  "month": "2026-08-01",
+                  "priority": "urgent",
+                  "tickets": 3
                 }
               ]
             },
+            "mark": {
+              "type": "line"
+            },
             "encoding": {
               "x": {
-                "field": "carrier",
-                "type": "nominal",
-                "title": "Carrier"
+                "field": "month",
+                "type": "temporal",
+                "title": "Month"
+              },
+              "y": {
+                "field": "tickets",
+                "type": "quantitative",
+                "title": "Tickets"
+              },
+              "color": {
+                "field": "priority",
+                "type": "nominal"
               },
               "tooltip": [
                 {
-                  "field": "carrier",
-                  "type": "nominal"
+                  "field": "month",
+                  "type": "temporal"
                 },
                 {
-                  "field": "deliveries",
+                  "field": "tickets",
                   "type": "quantitative",
                   "format": ","
                 },
                 {
-                  "field": "avg_days",
-                  "type": "quantitative",
-                  "format": ",.2f"
+                  "field": "priority",
+                  "type": "nominal"
                 }
               ]
             },
-            "layer": [
-              {
-                "mark": {
-                  "type": "bar"
-                },
-                "encoding": {
-                  "y": {
-                    "field": "deliveries",
-                    "type": "quantitative",
-                    "title": "Deliveries"
-                  },
-                  "color": {
-                    "datum": "Deliveries"
-                  }
-                }
-              },
-              {
-                "mark": {
-                  "type": "line",
-                  "point": true
-                },
-                "encoding": {
-                  "y": {
-                    "field": "avg_days",
-                    "type": "quantitative",
-                    "title": "Average days"
-                  },
-                  "color": {
-                    "datum": "Average days"
-                  }
-                }
-              }
-            ],
-            "resolve": {
-              "scale": {
-                "y": "independent"
-              }
-            },
             "usermeta": {
               "datamind": {
-                "chart_type": "combo",
+                "chart_type": "line",
                 "orientation": "auto",
                 "stack": "stacked",
-                "categories": 6
+                "categories": 12
               }
             }
           },
@@ -3061,10 +9915,849 @@ export const BOARDS: ScriptedBoard[] = [
         }
       },
       {
-        "title": "Stock at or below reorder level",
+        "title": "The detail behind the numbers",
+        "tile_type": "TEXT",
+        "question": "The rows the charts summarise, each sorted on the column that decides it: the largest accounts, this year's best sellers, the latest orders, stock below its reorder level, the past year's campaigns and the carriers that deliver it all.",
+        "sql": "",
+        "sql_origin": "HANDWRITTEN",
+        "chart_config": null,
+        "table_config": null,
+        "grid_x": 0,
+        "grid_y": 53,
+        "grid_w": 12,
+        "grid_h": 2,
+        "position": 20,
+        "result": null
+      },
+      {
+        "title": "Largest customers",
         "tile_type": "TABLE",
-        "question": "Which products are at or below their reorder level?",
-        "sql": "SELECT p.name AS product, w.name AS warehouse, i.quantity AS on_hand, i.reorder_level FROM public.inventory AS i JOIN public.products AS p ON p.id = i.product_id JOIN public.warehouses AS w ON w.id = i.warehouse_id WHERE i.quantity <= i.reorder_level AND p.active ORDER BY i.quantity - i.reorder_level, p.name LIMIT 12",
+        "question": "Our largest customers over the last 12 months",
+        "sql": "SELECT c.name AS customer, t.name AS tier, COUNT(*) AS orders, ROUND(SUM(o.total_amount), 2) AS revenue FROM public.orders AS o JOIN public.customers AS c ON c.id = o.customer_id LEFT JOIN public.loyalty_tiers AS t ON t.id = c.loyalty_tier_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('MONTH', CURRENT_DATE) - INTERVAL '12 MONTHS' AND o.order_date < DATE_TRUNC('MONTH', CURRENT_DATE) GROUP BY c.name, t.name ORDER BY revenue DESC LIMIT 12",
+        "sql_origin": "GENERATED_EDITED",
+        "chart_config": null,
+        "table_config": {
+          "columns": [
+            {
+              "name": "customer",
+              "label": "Customer",
+              "format": "auto",
+              "align": "auto"
+            },
+            {
+              "name": "tier",
+              "label": "Loyalty tier",
+              "format": "auto",
+              "align": "auto"
+            },
+            {
+              "name": "orders",
+              "label": "Orders",
+              "format": "integer",
+              "align": "right"
+            },
+            {
+              "name": "revenue",
+              "label": "Revenue",
+              "format": "decimal",
+              "align": "right"
+            }
+          ],
+          "sort_column": "revenue",
+          "sort_direction": "desc"
+        },
+        "grid_x": 0,
+        "grid_y": 55,
+        "grid_w": 6,
+        "grid_h": 8,
+        "position": 21,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "customer",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "tier",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "orders",
+              "db_type": "bigint",
+              "semantic_type": "quantitative"
+            },
+            {
+              "name": "revenue",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "Meridian Health Systems Inc.",
+              "Bronze",
+              7,
+              254455.58
+            ],
+            [
+              "Crescent Foods (Pty) Ltd",
+              "Silver",
+              35,
+              74029.63
+            ],
+            [
+              "Crescent Logistics Pte Ltd",
+              "Bronze",
+              47,
+              69823.45
+            ],
+            [
+              "Onyx Legal ApS",
+              "Silver",
+              40,
+              63439.99
+            ],
+            [
+              "Mosaic Academy S.L.",
+              "Bronze",
+              39,
+              59839.36
+            ],
+            [
+              "Kestrel Clinic ApS",
+              "Bronze",
+              36,
+              53582.09
+            ],
+            [
+              "Silverline Dental Group LLC",
+              "Bronze",
+              27,
+              51604.91
+            ],
+            [
+              "Cobalt Robotics Co.",
+              "Silver",
+              30,
+              51500.84
+            ],
+            [
+              "Atlas Pharmacy S.L.",
+              "Gold",
+              30,
+              50527.0
+            ],
+            [
+              "Oakridge Construction Ltd",
+              null,
+              33,
+              48395.93
+            ],
+            [
+              "Glenmore Analytics BV",
+              "Bronze",
+              67,
+              47106.07
+            ],
+            [
+              "Elmstead Construction S.L.",
+              "Silver",
+              25,
+              46441.92
+            ]
+          ],
+          "row_count": 12,
+          "truncated": false,
+          "duration_ms": 33,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "customer": "Meridian Health Systems Inc.",
+                  "tier": "Bronze",
+                  "orders": 7,
+                  "revenue": 254455.58
+                },
+                {
+                  "customer": "Crescent Foods (Pty) Ltd",
+                  "tier": "Silver",
+                  "orders": 35,
+                  "revenue": 74029.63
+                },
+                {
+                  "customer": "Crescent Logistics Pte Ltd",
+                  "tier": "Bronze",
+                  "orders": 47,
+                  "revenue": 69823.45
+                },
+                {
+                  "customer": "Onyx Legal ApS",
+                  "tier": "Silver",
+                  "orders": 40,
+                  "revenue": 63439.99
+                },
+                {
+                  "customer": "Mosaic Academy S.L.",
+                  "tier": "Bronze",
+                  "orders": 39,
+                  "revenue": 59839.36
+                },
+                {
+                  "customer": "Kestrel Clinic ApS",
+                  "tier": "Bronze",
+                  "orders": 36,
+                  "revenue": 53582.09
+                },
+                {
+                  "customer": "Silverline Dental Group LLC",
+                  "tier": "Bronze",
+                  "orders": 27,
+                  "revenue": 51604.91
+                },
+                {
+                  "customer": "Cobalt Robotics Co.",
+                  "tier": "Silver",
+                  "orders": 30,
+                  "revenue": 51500.84
+                },
+                {
+                  "customer": "Atlas Pharmacy S.L.",
+                  "tier": "Gold",
+                  "orders": 30,
+                  "revenue": 50527.0
+                },
+                {
+                  "customer": "Oakridge Construction Ltd",
+                  "tier": null,
+                  "orders": 33,
+                  "revenue": 48395.93
+                },
+                {
+                  "customer": "Glenmore Analytics BV",
+                  "tier": "Bronze",
+                  "orders": 67,
+                  "revenue": 47106.07
+                },
+                {
+                  "customer": "Elmstead Construction S.L.",
+                  "tier": "Silver",
+                  "orders": 25,
+                  "revenue": 46441.92
+                }
+              ]
+            },
+            "mark": {
+              "type": "bar"
+            },
+            "encoding": {
+              "x": {
+                "field": "revenue",
+                "type": "quantitative",
+                "axis": {
+                  "format": "~s"
+                }
+              },
+              "y": {
+                "field": "customer",
+                "type": "nominal",
+                "sort": "-x"
+              },
+              "color": {
+                "field": "tier",
+                "type": "nominal"
+              },
+              "tooltip": [
+                {
+                  "field": "customer",
+                  "type": "nominal"
+                },
+                {
+                  "field": "revenue",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                },
+                {
+                  "field": "tier",
+                  "type": "nominal"
+                },
+                {
+                  "field": "orders",
+                  "type": "quantitative",
+                  "format": ","
+                }
+              ]
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "bar",
+                "orientation": "horizontal",
+                "stack": "stacked",
+                "categories": 12
+              }
+            }
+          },
+          "chart_source": "heuristic",
+          "chart_note": null,
+          "kpi": null,
+          "error": null
+        }
+      },
+      {
+        "title": "Top products this year",
+        "tile_type": "TABLE",
+        "question": "Top products by revenue this year",
+        "sql": "SELECT p.name AS product, cat.name AS category, SUM(oi.quantity) AS units, ROUND(SUM(oi.line_total), 2) AS revenue FROM public.orders AS o JOIN public.order_items AS oi ON oi.order_id = o.id JOIN public.products AS p ON p.id = oi.product_id JOIN public.categories AS cat ON cat.id = p.category_id WHERE o.status IN ('completed', 'shipped') AND o.order_date >= DATE_TRUNC('YEAR', CURRENT_DATE) GROUP BY p.name, cat.name ORDER BY revenue DESC LIMIT 12",
+        "sql_origin": "GENERATED",
+        "chart_config": null,
+        "table_config": {
+          "columns": [
+            {
+              "name": "product",
+              "label": "Product",
+              "format": "auto",
+              "align": "auto"
+            },
+            {
+              "name": "category",
+              "label": "Category",
+              "format": "auto",
+              "align": "auto"
+            },
+            {
+              "name": "units",
+              "label": "Units",
+              "format": "integer",
+              "align": "right"
+            },
+            {
+              "name": "revenue",
+              "label": "Revenue",
+              "format": "decimal",
+              "align": "right"
+            }
+          ],
+          "sort_column": "revenue",
+          "sort_direction": "desc"
+        },
+        "grid_x": 6,
+        "grid_y": 55,
+        "grid_w": 6,
+        "grid_h": 8,
+        "position": 22,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "product",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "category",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "units",
+              "db_type": "bigint",
+              "semantic_type": "quantitative"
+            },
+            {
+              "name": "revenue",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "Arcwave 27\" 4K Monitor",
+              "Displays",
+              1494,
+              628356.3
+            ],
+            [
+              "Arcwave 34\" UltraWide Monitor",
+              "Displays",
+              448,
+              287377.2
+            ],
+            [
+              "Arcwave 32\" Curved QHD Monitor",
+              "Displays",
+              690,
+              266037.1
+            ],
+            [
+              "Northpeak Thunderbolt 4 Dock",
+              "Accessories",
+              1122,
+              251178.65
+            ],
+            [
+              "Halo NC700 Noise-Cancelling Headset",
+              "Audio",
+              741,
+              181844.7
+            ],
+            [
+              "Vault 2TB Portable SSD",
+              "Storage",
+              889,
+              166187.7
+            ],
+            [
+              "Arcwave 24\" FHD Monitor",
+              "Displays",
+              959,
+              160110.6
+            ],
+            [
+              "Meshline Wi-Fi 6 Mesh System (3-pack)",
+              "Networking",
+              546,
+              150925.05
+            ],
+            [
+              "Keystone K2 Mechanical Keyboard",
+              "Peripherals",
+              1035,
+              132315.3
+            ],
+            [
+              "Arcwave 16\" Portable USB-C Monitor",
+              "Displays",
+              579,
+              124840.95
+            ],
+            [
+              "Halo Air Wireless Earbuds",
+              "Audio",
+              849,
+              108134.25
+            ],
+            [
+              "Keystone Slim Low-Profile Keyboard",
+              "Peripherals",
+              1268,
+              97825.7
+            ]
+          ],
+          "row_count": 12,
+          "truncated": false,
+          "duration_ms": 30,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "product": "Arcwave 27\" 4K Monitor",
+                  "category": "Displays",
+                  "units": 1494,
+                  "revenue": 628356.3
+                },
+                {
+                  "product": "Arcwave 34\" UltraWide Monitor",
+                  "category": "Displays",
+                  "units": 448,
+                  "revenue": 287377.2
+                },
+                {
+                  "product": "Arcwave 32\" Curved QHD Monitor",
+                  "category": "Displays",
+                  "units": 690,
+                  "revenue": 266037.1
+                },
+                {
+                  "product": "Northpeak Thunderbolt 4 Dock",
+                  "category": "Accessories",
+                  "units": 1122,
+                  "revenue": 251178.65
+                },
+                {
+                  "product": "Halo NC700 Noise-Cancelling Headset",
+                  "category": "Audio",
+                  "units": 741,
+                  "revenue": 181844.7
+                },
+                {
+                  "product": "Vault 2TB Portable SSD",
+                  "category": "Storage",
+                  "units": 889,
+                  "revenue": 166187.7
+                },
+                {
+                  "product": "Arcwave 24\" FHD Monitor",
+                  "category": "Displays",
+                  "units": 959,
+                  "revenue": 160110.6
+                },
+                {
+                  "product": "Meshline Wi-Fi 6 Mesh System (3-pack)",
+                  "category": "Networking",
+                  "units": 546,
+                  "revenue": 150925.05
+                },
+                {
+                  "product": "Keystone K2 Mechanical Keyboard",
+                  "category": "Peripherals",
+                  "units": 1035,
+                  "revenue": 132315.3
+                },
+                {
+                  "product": "Arcwave 16\" Portable USB-C Monitor",
+                  "category": "Displays",
+                  "units": 579,
+                  "revenue": 124840.95
+                },
+                {
+                  "product": "Halo Air Wireless Earbuds",
+                  "category": "Audio",
+                  "units": 849,
+                  "revenue": 108134.25
+                },
+                {
+                  "product": "Keystone Slim Low-Profile Keyboard",
+                  "category": "Peripherals",
+                  "units": 1268,
+                  "revenue": 97825.7
+                }
+              ]
+            },
+            "mark": {
+              "type": "bar"
+            },
+            "encoding": {
+              "x": {
+                "field": "revenue",
+                "type": "quantitative",
+                "axis": {
+                  "format": "~s"
+                }
+              },
+              "y": {
+                "field": "product",
+                "type": "nominal",
+                "sort": "-x"
+              },
+              "color": {
+                "field": "category",
+                "type": "nominal"
+              },
+              "tooltip": [
+                {
+                  "field": "product",
+                  "type": "nominal"
+                },
+                {
+                  "field": "revenue",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                },
+                {
+                  "field": "category",
+                  "type": "nominal"
+                },
+                {
+                  "field": "units",
+                  "type": "quantitative",
+                  "format": ","
+                }
+              ]
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "bar",
+                "orientation": "horizontal",
+                "stack": "stacked",
+                "categories": 12
+              }
+            }
+          },
+          "chart_source": "heuristic",
+          "chart_note": null,
+          "kpi": null,
+          "error": null
+        }
+      },
+      {
+        "title": "Latest orders",
+        "tile_type": "TABLE",
+        "question": "The latest orders",
+        "sql": "SELECT o.order_date AS placed, c.name AS customer, o.status, o.total_amount AS total FROM public.orders AS o JOIN public.customers AS c ON c.id = o.customer_id ORDER BY o.placed_at DESC, o.id DESC LIMIT 12",
+        "sql_origin": "GENERATED",
+        "chart_config": null,
+        "table_config": {
+          "columns": [
+            {
+              "name": "placed",
+              "label": "Placed",
+              "format": "auto",
+              "align": "auto"
+            },
+            {
+              "name": "customer",
+              "label": "Customer",
+              "format": "auto",
+              "align": "auto"
+            },
+            {
+              "name": "status",
+              "label": "Status",
+              "format": "auto",
+              "align": "auto"
+            },
+            {
+              "name": "total",
+              "label": "Total",
+              "format": "decimal",
+              "align": "right"
+            }
+          ]
+        },
+        "grid_x": 0,
+        "grid_y": 63,
+        "grid_w": 6,
+        "grid_h": 8,
+        "position": 23,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "placed",
+              "db_type": "date",
+              "semantic_type": "temporal"
+            },
+            {
+              "name": "customer",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "status",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "total",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "2026-09-25",
+              "Birch Clinic LLC",
+              "pending",
+              882.67
+            ],
+            [
+              "2026-09-25",
+              "Foxglove Dental Group Co.",
+              "shipped",
+              182.43
+            ],
+            [
+              "2026-09-25",
+              "Wren Robotics LLC",
+              "pending",
+              4806.94
+            ],
+            [
+              "2026-09-25",
+              "Willow Capital Inc.",
+              "shipped",
+              766.51
+            ],
+            [
+              "2026-09-25",
+              "Bluewater Logistics S.A.",
+              "shipped",
+              515.04
+            ],
+            [
+              "2026-09-25",
+              "Granite Logistics AS",
+              "pending",
+              785.13
+            ],
+            [
+              "2026-09-25",
+              "Vantage Hospitality LLC",
+              "shipped",
+              1528.28
+            ],
+            [
+              "2026-09-25",
+              "Crescent Clinic Co.",
+              "shipped",
+              830.7
+            ],
+            [
+              "2026-09-24",
+              "Atlas Pharmacy S.L.",
+              "pending",
+              758.16
+            ],
+            [
+              "2026-09-24",
+              "Ironwood Legal Inc.",
+              "shipped",
+              1122.01
+            ],
+            [
+              "2026-09-24",
+              "Vantage Realty GmbH",
+              "pending",
+              282.24
+            ],
+            [
+              "2026-09-24",
+              "Canyon Engineering S.A. de C.V.",
+              "pending",
+              3997.36
+            ]
+          ],
+          "row_count": 12,
+          "truncated": false,
+          "duration_ms": 18,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "placed": "2026-09-25",
+                  "customer": "Birch Clinic LLC",
+                  "status": "pending",
+                  "total": 882.67
+                },
+                {
+                  "placed": "2026-09-25",
+                  "customer": "Foxglove Dental Group Co.",
+                  "status": "shipped",
+                  "total": 182.43
+                },
+                {
+                  "placed": "2026-09-25",
+                  "customer": "Wren Robotics LLC",
+                  "status": "pending",
+                  "total": 4806.94
+                },
+                {
+                  "placed": "2026-09-25",
+                  "customer": "Willow Capital Inc.",
+                  "status": "shipped",
+                  "total": 766.51
+                },
+                {
+                  "placed": "2026-09-25",
+                  "customer": "Bluewater Logistics S.A.",
+                  "status": "shipped",
+                  "total": 515.04
+                },
+                {
+                  "placed": "2026-09-25",
+                  "customer": "Granite Logistics AS",
+                  "status": "pending",
+                  "total": 785.13
+                },
+                {
+                  "placed": "2026-09-25",
+                  "customer": "Vantage Hospitality LLC",
+                  "status": "shipped",
+                  "total": 1528.28
+                },
+                {
+                  "placed": "2026-09-25",
+                  "customer": "Crescent Clinic Co.",
+                  "status": "shipped",
+                  "total": 830.7
+                },
+                {
+                  "placed": "2026-09-24",
+                  "customer": "Atlas Pharmacy S.L.",
+                  "status": "pending",
+                  "total": 758.16
+                },
+                {
+                  "placed": "2026-09-24",
+                  "customer": "Ironwood Legal Inc.",
+                  "status": "shipped",
+                  "total": 1122.01
+                },
+                {
+                  "placed": "2026-09-24",
+                  "customer": "Vantage Realty GmbH",
+                  "status": "pending",
+                  "total": 282.24
+                },
+                {
+                  "placed": "2026-09-24",
+                  "customer": "Canyon Engineering S.A. de C.V.",
+                  "status": "pending",
+                  "total": 3997.36
+                }
+              ]
+            },
+            "mark": {
+              "type": "line"
+            },
+            "encoding": {
+              "x": {
+                "field": "placed",
+                "type": "temporal"
+              },
+              "y": {
+                "field": "total",
+                "type": "quantitative"
+              },
+              "color": {
+                "field": "status",
+                "type": "nominal"
+              },
+              "tooltip": [
+                {
+                  "field": "placed",
+                  "type": "temporal"
+                },
+                {
+                  "field": "total",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                },
+                {
+                  "field": "status",
+                  "type": "nominal"
+                },
+                {
+                  "field": "customer",
+                  "type": "nominal"
+                }
+              ]
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "line",
+                "orientation": "auto",
+                "stack": "stacked",
+                "categories": 2
+              }
+            }
+          },
+          "chart_source": "heuristic",
+          "chart_note": null,
+          "kpi": null,
+          "error": null
+        }
+      },
+      {
+        "title": "Below reorder level",
+        "tile_type": "TABLE",
+        "question": "Which products are below their reorder level, and by how much?",
+        "sql": "SELECT p.name AS product, w.name AS warehouse, i.quantity AS on_hand, i.reorder_level - i.quantity AS shortfall FROM public.inventory AS i JOIN public.products AS p ON p.id = i.product_id JOIN public.warehouses AS w ON w.id = i.warehouse_id WHERE i.quantity < i.reorder_level AND p.active ORDER BY shortfall DESC, p.name LIMIT 12",
         "sql_origin": "GENERATED",
         "chart_config": null,
         "table_config": {
@@ -3083,23 +10776,25 @@ export const BOARDS: ScriptedBoard[] = [
             },
             {
               "name": "on_hand",
-              "label": "On hand",
+              "label": "Stock",
               "format": "integer",
               "align": "right"
             },
             {
-              "name": "reorder_level",
-              "label": "Reorder at",
+              "name": "shortfall",
+              "label": "Short",
               "format": "integer",
               "align": "right"
             }
-          ]
+          ],
+          "sort_column": "shortfall",
+          "sort_direction": "desc"
         },
-        "grid_x": 5,
-        "grid_y": 36,
-        "grid_w": 7,
-        "grid_h": 7,
-        "position": 15,
+        "grid_x": 6,
+        "grid_y": 63,
+        "grid_w": 6,
+        "grid_h": 8,
+        "position": 24,
         "result": {
           "status": "OK",
           "columns": [
@@ -3119,7 +10814,7 @@ export const BOARDS: ScriptedBoard[] = [
               "semantic_type": "quantitative"
             },
             {
-              "name": "reorder_level",
+              "name": "shortfall",
               "db_type": "bigint",
               "semantic_type": "quantitative"
             }
@@ -3135,13 +10830,13 @@ export const BOARDS: ScriptedBoard[] = [
               "Keystone K2 Mechanical Keyboard",
               "Columbus DC",
               21,
-              51
+              30
             ],
             [
               "Northpeak Thunderbolt 4 Dock",
               "Venlo DC",
               10,
-              36
+              26
             ],
             [
               "Meshline Wi-Fi 6E Router",
@@ -3153,7 +10848,7 @@ export const BOARDS: ScriptedBoard[] = [
               "Vault 4TB External Hard Drive",
               "Reno DC",
               10,
-              24
+              14
             ],
             [
               "Lumen Commuter Tech Backpack",
@@ -3165,42 +10860,42 @@ export const BOARDS: ScriptedBoard[] = [
               "Vault NAS 4-Bay Enclosure",
               "Dubai DC",
               2,
-              10
+              8
             ],
             [
               "Lumen 100W GaN Charger",
               "Venlo DC",
               41,
-              48
+              7
             ],
             [
               "Arcwave 16\" Portable USB-C Monitor",
               "Gothenburg DC",
               7,
-              10
+              3
             ],
             [
               "Clarity Pen Display 13",
               "Columbus DC",
               7,
-              10
+              3
             ],
             [
               "Halo Air Wireless Earbuds",
               "Dubai DC",
               9,
-              12
+              3
             ],
             [
               "Meshline 8-Port Gigabit Switch",
               "Venlo DC",
               27,
-              30
+              3
             ]
           ],
           "row_count": 12,
           "truncated": false,
-          "duration_ms": 2,
+          "duration_ms": 5,
           "vega_spec": {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
             "data": {
@@ -3209,73 +10904,73 @@ export const BOARDS: ScriptedBoard[] = [
                   "product": "Halo NC700 Noise-Cancelling Headset",
                   "warehouse": "Reno DC",
                   "on_hand": 0,
-                  "reorder_level": 39
+                  "shortfall": 39
                 },
                 {
                   "product": "Keystone K2 Mechanical Keyboard",
                   "warehouse": "Columbus DC",
                   "on_hand": 21,
-                  "reorder_level": 51
+                  "shortfall": 30
                 },
                 {
                   "product": "Northpeak Thunderbolt 4 Dock",
                   "warehouse": "Venlo DC",
                   "on_hand": 10,
-                  "reorder_level": 36
+                  "shortfall": 26
                 },
                 {
                   "product": "Meshline Wi-Fi 6E Router",
                   "warehouse": "Venlo DC",
                   "on_hand": 0,
-                  "reorder_level": 17
+                  "shortfall": 17
                 },
                 {
                   "product": "Vault 4TB External Hard Drive",
                   "warehouse": "Reno DC",
                   "on_hand": 10,
-                  "reorder_level": 24
+                  "shortfall": 14
                 },
                 {
                   "product": "Lumen Commuter Tech Backpack",
                   "warehouse": "São Paulo DC",
                   "on_hand": 0,
-                  "reorder_level": 10
+                  "shortfall": 10
                 },
                 {
                   "product": "Vault NAS 4-Bay Enclosure",
                   "warehouse": "Dubai DC",
                   "on_hand": 2,
-                  "reorder_level": 10
+                  "shortfall": 8
                 },
                 {
                   "product": "Lumen 100W GaN Charger",
                   "warehouse": "Venlo DC",
                   "on_hand": 41,
-                  "reorder_level": 48
+                  "shortfall": 7
                 },
                 {
                   "product": "Arcwave 16\" Portable USB-C Monitor",
                   "warehouse": "Gothenburg DC",
                   "on_hand": 7,
-                  "reorder_level": 10
+                  "shortfall": 3
                 },
                 {
                   "product": "Clarity Pen Display 13",
                   "warehouse": "Columbus DC",
                   "on_hand": 7,
-                  "reorder_level": 10
+                  "shortfall": 3
                 },
                 {
                   "product": "Halo Air Wireless Earbuds",
                   "warehouse": "Dubai DC",
                   "on_hand": 9,
-                  "reorder_level": 12
+                  "shortfall": 3
                 },
                 {
                   "product": "Meshline 8-Port Gigabit Switch",
                   "warehouse": "Venlo DC",
                   "on_hand": 27,
-                  "reorder_level": 30
+                  "shortfall": 3
                 }
               ]
             },
@@ -3284,7 +10979,7 @@ export const BOARDS: ScriptedBoard[] = [
             },
             "encoding": {
               "x": {
-                "field": "reorder_level",
+                "field": "shortfall",
                 "type": "quantitative"
               },
               "y": {
@@ -3302,7 +10997,7 @@ export const BOARDS: ScriptedBoard[] = [
                   "type": "nominal"
                 },
                 {
-                  "field": "reorder_level",
+                  "field": "shortfall",
                   "type": "quantitative",
                   "format": ","
                 },
@@ -3323,6 +11018,436 @@ export const BOARDS: ScriptedBoard[] = [
                 "orientation": "horizontal",
                 "stack": "stacked",
                 "categories": 12
+              }
+            }
+          },
+          "chart_source": "heuristic",
+          "chart_note": null,
+          "kpi": null,
+          "error": null
+        }
+      },
+      {
+        "title": "Campaign results",
+        "tile_type": "TABLE",
+        "question": "How did the past year's campaigns do?",
+        "sql": "SELECT pr.name AS campaign, ROUND(pr.discount_pct / 100.0, 4) AS discount, COUNT(*) AS orders, ROUND(SUM(o.total_amount), 2) AS revenue FROM public.promotions AS pr JOIN public.order_promotions AS op ON op.promotion_id = pr.id JOIN public.orders AS o ON o.id = op.order_id WHERE o.status IN ('completed', 'shipped') AND pr.ends_on >= CURRENT_DATE - INTERVAL '12 MONTHS' GROUP BY pr.name, pr.discount_pct, pr.starts_on ORDER BY pr.starts_on DESC LIMIT 1000",
+        "sql_origin": "GENERATED",
+        "chart_config": null,
+        "table_config": {
+          "columns": [
+            {
+              "name": "campaign",
+              "label": "Campaign",
+              "format": "auto",
+              "align": "auto"
+            },
+            {
+              "name": "discount",
+              "label": "Discount",
+              "format": "percent",
+              "align": "right"
+            },
+            {
+              "name": "orders",
+              "label": "Orders",
+              "format": "integer",
+              "align": "right"
+            },
+            {
+              "name": "revenue",
+              "label": "Revenue",
+              "format": "decimal",
+              "align": "right"
+            }
+          ]
+        },
+        "grid_x": 0,
+        "grid_y": 71,
+        "grid_w": 6,
+        "grid_h": 5,
+        "position": 25,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "campaign",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "discount",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            },
+            {
+              "name": "orders",
+              "db_type": "bigint",
+              "semantic_type": "quantitative"
+            },
+            {
+              "name": "revenue",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "Back to School 2026",
+              0.1,
+              257,
+              173212.92
+            ],
+            [
+              "Spring Refresh 2026",
+              0.08,
+              277,
+              223961.9
+            ],
+            [
+              "New Year Clearance 2026",
+              0.2,
+              148,
+              110501.36
+            ],
+            [
+              "Cyber Monday 2025",
+              0.12,
+              31,
+              23915.88
+            ],
+            [
+              "Black Friday 2025",
+              0.15,
+              88,
+              73093.09
+            ],
+            [
+              "Back to School 2025",
+              0.1,
+              252,
+              178423.94
+            ]
+          ],
+          "row_count": 6,
+          "truncated": false,
+          "duration_ms": 13,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "campaign": "Back to School 2026",
+                  "discount": 0.1,
+                  "orders": 257,
+                  "revenue": 173212.92
+                },
+                {
+                  "campaign": "Spring Refresh 2026",
+                  "discount": 0.08,
+                  "orders": 277,
+                  "revenue": 223961.9
+                },
+                {
+                  "campaign": "New Year Clearance 2026",
+                  "discount": 0.2,
+                  "orders": 148,
+                  "revenue": 110501.36
+                },
+                {
+                  "campaign": "Cyber Monday 2025",
+                  "discount": 0.12,
+                  "orders": 31,
+                  "revenue": 23915.88
+                },
+                {
+                  "campaign": "Black Friday 2025",
+                  "discount": 0.15,
+                  "orders": 88,
+                  "revenue": 73093.09
+                },
+                {
+                  "campaign": "Back to School 2025",
+                  "discount": 0.1,
+                  "orders": 252,
+                  "revenue": 178423.94
+                }
+              ]
+            },
+            "mark": {
+              "type": "bar"
+            },
+            "encoding": {
+              "x": {
+                "field": "campaign",
+                "type": "nominal",
+                "sort": "-y"
+              },
+              "y": {
+                "field": "revenue",
+                "type": "quantitative",
+                "axis": {
+                  "format": "~s"
+                }
+              },
+              "tooltip": [
+                {
+                  "field": "campaign",
+                  "type": "nominal"
+                },
+                {
+                  "field": "revenue",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                },
+                {
+                  "field": "discount",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                },
+                {
+                  "field": "orders",
+                  "type": "quantitative",
+                  "format": ","
+                }
+              ]
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "bar",
+                "orientation": "vertical",
+                "stack": "stacked",
+                "categories": 6
+              }
+            }
+          },
+          "chart_source": "heuristic",
+          "chart_note": null,
+          "kpi": null,
+          "error": null
+        }
+      },
+      {
+        "title": "Carrier performance",
+        "tile_type": "TABLE",
+        "question": "Shipments, speed and cost by carrier over the last 12 months",
+        "sql": "SELECT ca.name AS carrier, COUNT(*) AS shipments, ROUND(CAST(AVG(CAST(s.delivered_at AS DATE) - CAST(s.shipped_at AS DATE)) AS DECIMAL), 2) AS avg_days, ROUND(CAST(1.0 * COUNT(*) FILTER(WHERE s.delivered_at IS NOT NULL) / COUNT(*) AS DECIMAL), 4) AS delivered, ROUND(SUM(s.cost), 2) AS cost FROM public.shipments AS s JOIN public.carriers AS ca ON ca.id = s.carrier_id WHERE s.shipped_at >= CURRENT_DATE - INTERVAL '12 MONTHS' GROUP BY ca.name ORDER BY shipments DESC LIMIT 1000",
+        "sql_origin": "GENERATED",
+        "chart_config": null,
+        "table_config": {
+          "columns": [
+            {
+              "name": "carrier",
+              "label": "Carrier",
+              "format": "auto",
+              "align": "auto"
+            },
+            {
+              "name": "shipments",
+              "label": "Shipments",
+              "format": "integer",
+              "align": "right"
+            },
+            {
+              "name": "avg_days",
+              "label": "Avg days",
+              "format": "decimal",
+              "align": "right"
+            },
+            {
+              "name": "delivered",
+              "label": "Delivered",
+              "format": "percent",
+              "align": "right"
+            },
+            {
+              "name": "cost",
+              "label": "Shipping cost",
+              "format": "decimal",
+              "align": "right"
+            }
+          ],
+          "sort_column": "shipments",
+          "sort_direction": "desc"
+        },
+        "grid_x": 6,
+        "grid_y": 71,
+        "grid_w": 6,
+        "grid_h": 5,
+        "position": 26,
+        "result": {
+          "status": "OK",
+          "columns": [
+            {
+              "name": "carrier",
+              "db_type": "text",
+              "semantic_type": "nominal"
+            },
+            {
+              "name": "shipments",
+              "db_type": "bigint",
+              "semantic_type": "quantitative"
+            },
+            {
+              "name": "avg_days",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            },
+            {
+              "name": "delivered",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            },
+            {
+              "name": "cost",
+              "db_type": "numeric",
+              "semantic_type": "quantitative"
+            }
+          ],
+          "rows": [
+            [
+              "DHL",
+              2233,
+              3.51,
+              0.9825,
+              39335.93
+            ],
+            [
+              "UPS",
+              2057,
+              3.5,
+              0.9791,
+              35379.08
+            ],
+            [
+              "FedEx",
+              1777,
+              3.47,
+              0.982,
+              34855.67
+            ],
+            [
+              "USPS",
+              987,
+              3.51,
+              0.9807,
+              16891.31
+            ],
+            [
+              "Aramex",
+              284,
+              3.48,
+              0.9754,
+              5072.79
+            ],
+            [
+              "Local Courier",
+              211,
+              3.48,
+              0.9905,
+              3632.98
+            ]
+          ],
+          "row_count": 6,
+          "truncated": false,
+          "duration_ms": 13,
+          "vega_spec": {
+            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "data": {
+              "values": [
+                {
+                  "carrier": "DHL",
+                  "shipments": 2233,
+                  "avg_days": 3.51,
+                  "delivered": 0.9825,
+                  "cost": 39335.93
+                },
+                {
+                  "carrier": "UPS",
+                  "shipments": 2057,
+                  "avg_days": 3.5,
+                  "delivered": 0.9791,
+                  "cost": 35379.08
+                },
+                {
+                  "carrier": "FedEx",
+                  "shipments": 1777,
+                  "avg_days": 3.47,
+                  "delivered": 0.982,
+                  "cost": 34855.67
+                },
+                {
+                  "carrier": "USPS",
+                  "shipments": 987,
+                  "avg_days": 3.51,
+                  "delivered": 0.9807,
+                  "cost": 16891.31
+                },
+                {
+                  "carrier": "Aramex",
+                  "shipments": 284,
+                  "avg_days": 3.48,
+                  "delivered": 0.9754,
+                  "cost": 5072.79
+                },
+                {
+                  "carrier": "Local Courier",
+                  "shipments": 211,
+                  "avg_days": 3.48,
+                  "delivered": 0.9905,
+                  "cost": 3632.98
+                }
+              ]
+            },
+            "mark": {
+              "type": "bar"
+            },
+            "encoding": {
+              "x": {
+                "field": "carrier",
+                "type": "nominal",
+                "sort": "-y"
+              },
+              "y": {
+                "field": "cost",
+                "type": "quantitative",
+                "axis": {
+                  "format": "~s"
+                }
+              },
+              "tooltip": [
+                {
+                  "field": "carrier",
+                  "type": "nominal"
+                },
+                {
+                  "field": "cost",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                },
+                {
+                  "field": "shipments",
+                  "type": "quantitative",
+                  "format": ","
+                },
+                {
+                  "field": "avg_days",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                },
+                {
+                  "field": "delivered",
+                  "type": "quantitative",
+                  "format": ",.2f"
+                }
+              ]
+            },
+            "usermeta": {
+              "datamind": {
+                "chart_type": "bar",
+                "orientation": "vertical",
+                "stack": "stacked",
+                "categories": 6
               }
             }
           },

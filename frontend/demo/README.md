@@ -211,17 +211,24 @@ Recorded by `scripts/build.py` from `scripts/demo_dashboards.py`,
 `demo_reports.py` and `demo_knowledge.py`.
 
 **Two dashboards.** *Commercial overview* (Sales warehouse, the demo person's
-own): three KPIs with their month-on-month move and sparkline, revenue over
-two years, channel and region mix, category by segment, top products and
-customers, returns, carrier volume against speed, and stock at its reorder
-level, in sections with a line of prose each. *Rental operations* (Sakila,
+own) is the product's own board from `scripts/seed_demo_dashboard.py`, laid
+out the same way over data with a shape: 27 tiles in four parts, each after a
+line of prose. Six KPIs with their month-on-month move and sparkline (revenue,
+orders, gross margin; new customers, return rate, days to deliver), twelve
+charts that between them draw every family the planner has (area, stacked
+area, line, pie, bars both ways, stacked bars, heatmap, combo, scatter,
+histogram), and six formatted tables (largest customers, this year's best
+sellers, latest orders, stock below its reorder level, campaign results,
+carrier performance). *Rental operations* (Sakila,
 shared read-only by Priya Nair). Each tile is run the way a refresh runs it
 and planned by the dashboard service's own `_chart` / `_kpi`; the build fails
 on a tile that is rejected, returns nothing, or cannot draw what it is. Several
 layout choices exist because of what the planner does with a result, and are
 commented where they are made: three wide KPIs rather than four narrow ones, a
-month as a real date wherever a line should run along it, and no chart of a
-measure that is flat across its categories.
+month as a real date wherever a line should run along it and as text on a
+heatmap or combo, a histogram over one month under a cap rather than a year
+with its outliers, and no chart of a measure that is flat across its
+categories.
 
 **One report**, over the Sales warehouse because reports refuse Sakila's
 AGGREGATE policy: *Monthly business review — August 2026*, the demo person's
