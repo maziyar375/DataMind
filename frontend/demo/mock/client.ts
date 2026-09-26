@@ -312,10 +312,6 @@ const GRANTS: Record<string, Grant[]> = {
   [`report:${reportIdFor('monthly-business-review')}`]: [
     { id: 'g-12', principal_id: IDS.teams.finance, principal_name: 'Finance', principal_kind: 'TEAM', privilege: 'select', path: 'direct' },
   ],
-  [`report:${reportIdFor('quarterly-sales-review-fa')}`]: [
-    { id: 'g-13', principal_id: IDS.teams.finance, principal_name: 'Finance', principal_kind: 'TEAM', privilege: 'select', path: 'direct' },
-    { id: 'g-14', principal_id: IDS.users.mazbar, principal_name: 'Mazbar Azami', principal_kind: 'HUMAN', privilege: 'select', path: 'direct' },
-  ],
 }
 
 function grantsOn(type: string, id: string): Grant[] {

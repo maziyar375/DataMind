@@ -9,7 +9,7 @@ sentence citing block 2 may only state figures block 2's writer was given. The
 executive summary is checked against the sections' prose, since that is all the
 summary writer is shown.
 
-Both reports are over the Sales warehouse. Sakila's policy is AGGREGATE, and
+The report is over the Sales warehouse. Sakila's policy is AGGREGATE, and
 reports refuse NONE and AGGREGATE outright: a document written about values
 the writer was never shown would be a document of guesses.
 
@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from questions import Result, check, fa_money, fa_num, fa_pct, money, month_name, FA_MONTHS
+from questions import Result, check, money, month_name
 
 BOOKED = "o.status IN ('completed', 'shipped')"
 LAST_12 = (
@@ -87,7 +87,6 @@ def x(name: str, kind: str = "nominal", label: str | None = None) -> dict[str, A
 
 
 OWNER = ["describe", "select", "modify", "delete", "manage"]
-VIEWER = ["describe", "select"]
 
 # ── the statements, shared by the two reports where they ask the same thing ──
 MONTHLY_REVENUE_12 = f"""SELECT date_trunc('month', o.order_date)::date AS month,
@@ -170,26 +169,6 @@ WHERE i.quantity <= i.reorder_level
   AND p.active
 GROUP BY w.name
 ORDER BY products_to_reorder DESC"""
-
-MONTHLY_REVENUE_3 = f"""SELECT to_char(o.order_date, 'YYYY-MM') AS month,
-       ROUND(SUM(o.total_amount), 2) AS revenue,
-       COUNT(*) AS orders
-FROM public.orders AS o
-WHERE {BOOKED}
-  AND {LAST_3}
-GROUP BY 1
-ORDER BY 1"""
-
-REGION_3 = f"""SELECT r.name AS region,
-       ROUND(SUM(o.total_amount), 2) AS revenue
-FROM public.orders AS o
-JOIN public.customers AS c ON c.id = o.customer_id
-JOIN public.regions AS r ON r.id = c.region_id
-WHERE {BOOKED}
-  AND {LAST_3}
-GROUP BY r.name
-ORDER BY revenue DESC"""
-
 
 WORDS = ["None", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"]
 
@@ -350,97 +329,4 @@ MBR = ReportScript(
 )
 
 
-# ── Quarterly sales review (Persian) ───────────────────────────────────────
-def fa_month(iso: str) -> str:
-    return FA_MONTHS[int(iso[5:7]) - 1]
-
-
-def qsr_trend(results: list[Result]) -> str:
-    months = results[0].dicts()
-    check([m["month"][5:7] for m in months] == ["06", "07", "08"], "June, July and August")
-    total = sum(m["revenue"] for m in months)
-    jun, jul, aug = months
-    check(jun["revenue"] > 1.5 * jul["revenue"], "June stands far above the two after it")
-    # The bar axis is text, and a text axis is ranked by its measure: the
-    # months read in calendar order only while each is below the one before.
-    check(jul["revenue"] > aug["revenue"], "the bars fall in calendar order")
-    return (
-        f"در سه ماه گذشته مجموع فروش به {fa_money(total)} رسید [۱]. "
-        f"{fa_month(jun['month'])} با {fa_money(jun['revenue'])} پربارترین ماه بود و فروش در "
-        f"{fa_month(jul['month'])} به {fa_money(jul['revenue'])} و در {fa_month(aug['month'])} به "
-        f"{fa_money(aug['revenue'])} بازگشت [۱]. "
-        f"تعداد سفارش‌ها در {fa_month(aug['month'])} {fa_num(aug['orders'])} بود، در برابر "
-        f"{fa_num(jul['orders'])} در {fa_month(jul['month'])} [۱]."
-    )
-
-
-def qsr_categories(results: list[Result]) -> str:
-    rows = results[0].dicts()
-    total = sum(r["revenue"] for r in rows)
-    first, second, last = rows[0], rows[1], rows[-1]
-    check(first["category"] == "Displays" and second["category"] == "Accessories", "Displays, then Accessories")
-    return (
-        f"دسته‌بندی {first['category']} (نمایشگرها) با {fa_money(first['revenue'])}، یعنی "
-        f"{fa_pct(100 * first['revenue'] / total)} کل فروش، در صدر بود [۱]. "
-        f"پس از آن {second['category']} (لوازم جانبی) با {fa_money(second['revenue'])} قرار دارد و "
-        f"کمترین فروش به {last['category']} با {fa_money(last['revenue'])} رسید [۱]."
-    )
-
-
-def qsr_regions(results: list[Result]) -> str:
-    rows = results[0].dicts()
-    total = sum(r["revenue"] for r in rows)
-    first, second = rows[0], rows[1]
-    check(first["region"] == "North America" and second["region"] == "Europe", "North America, then Europe")
-    return (
-        f"آمریکای شمالی (North America) با {fa_money(first['revenue'])} نزدیک به نیمی از فروش سه ماه، یعنی "
-        f"{fa_pct(100 * first['revenue'] / total)}، را به خود اختصاص داد [۱]. "
-        f"اروپا (Europe) با {fa_money(second['revenue'])} در رتبهٔ دوم است [۱]."
-    )
-
-
-def qsr_summary(prose: list[str], results: list[list[Result]]) -> str:
-    months = results[0][0].dicts()
-    total = sum(m["revenue"] for m in months)
-    jun, aug = months[0], months[-1]
-    cats = results[1][0].dicts()
-    cat_total = sum(c["revenue"] for c in cats)
-    regions = results[2][0].dicts()
-    region_total = sum(r["revenue"] for r in regions)
-    return (
-        f"فروش سه ماه گذشته {fa_money(total)} بود و {fa_month(jun['month'])} با {fa_money(jun['revenue'])} "
-        f"بیش از هر ماه دیگری فروش داشت.\n\n"
-        f"- نمایشگرها با {fa_pct(100 * cats[0]['revenue'] / cat_total)} کل فروش بزرگ‌ترین دسته‌بندی بودند.\n"
-        f"- آمریکای شمالی {fa_pct(100 * regions[0]['revenue'] / region_total)} فروش سه ماه را به خود اختصاص داد.\n"
-        f"- تعداد سفارش‌ها در {fa_month(aug['month'])} {fa_num(aug['orders'])} بود."
-    )
-
-
-QSR = ReportScript(
-    id="quarterly-sales-review-fa",
-    name="مرور فروش سه‌ماههٔ تابستان ۲۰۲۶",
-    description="روند ماهانه، دسته‌بندی محصولات و مناطق در سه ماه گذشته، برای تیم مالی.",
-    prompt="گزارشی از فروش سه ماه گذشته برای تیم مالی: روند ماهانه، سهم دسته‌بندی‌های محصول و فروش مناطق.",
-    owner="Leila Karimi", privileges=VIEWER, days_old=9, run_days_ago=2.3,
-    summary=qsr_summary,
-    summary_intent="مهم‌ترین یافته‌ها برای تیم مالی.",
-    sections=[
-        Section("روند ماهانهٔ فروش", "فروش و تعداد سفارش هر ماه در سه ماه گذشته.", [
-            Block("فروش و تعداد سفارش هر ماه در سه ماه گذشته چقدر بوده است؟", "فروش ماهانه", "CHART",
-                  MONTHLY_REVENUE_3, chart={"chart_type": "bar", "x_axis": x("month", label="ماه"),
-                                            "y_axis": y("revenue", "فروش")}, time_window="last_3_months"),
-        ], qsr_trend),
-        Section("دسته‌بندی محصولات", "سهم هر دسته‌بندی محصول از فروش سه ماه گذشته.", [
-            Block("فروش هر دسته‌بندی محصول در سه ماه گذشته چقدر بوده است؟", "فروش به تفکیک دسته‌بندی", "CHART",
-                  CATEGORY_3, chart={"chart_type": "bar", "x_axis": x("category", label="دسته‌بندی"),
-                                     "y_axis": y("revenue", "فروش")}, time_window="last_3_months"),
-        ], qsr_categories),
-        Section("مناطق", "فروش هر منطقهٔ مشتری در سه ماه گذشته.", [
-            Block("فروش هر منطقه در سه ماه گذشته چقدر بوده است؟", "فروش به تفکیک منطقه", "CHART",
-                  REGION_3, chart={"chart_type": "bar", "orientation": "horizontal", "x_axis": x("region", label="منطقه"),
-                                   "y_axis": y("revenue", "فروش")}, time_window="last_3_months"),
-        ], qsr_regions),
-    ],
-)
-
-REPORTS: list[ReportScript] = [MBR, QSR]
+REPORTS: list[ReportScript] = [MBR]

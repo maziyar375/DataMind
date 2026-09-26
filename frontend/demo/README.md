@@ -223,11 +223,10 @@ commented where they are made: three wide KPIs rather than four narrow ones, a
 month as a real date wherever a line should run along it, and no chart of a
 measure that is flat across its categories.
 
-**Two reports**, both over the Sales warehouse because reports refuse Sakila's
-AGGREGATE policy. *Monthly business review — August 2026* (English, the demo
-person's own, so it opens on its outline) and *مرور فروش سه‌ماههٔ تابستان ۲۰۲۶*
-(Persian, shared by Leila Karimi, so it opens read-only). Every block runs like
-a tile. Every paragraph goes through `parse_claims` and the report worker's own
+**One report**, over the Sales warehouse because reports refuse Sakila's
+AGGREGATE policy: *Monthly business review — August 2026*, the demo person's
+own, so it opens on its outline and *Last run* opens the document. Every block
+runs like a tile. Every paragraph goes through `parse_claims` and the report worker's own
 `_narration` and `_numeric_check`, so a sentence citing figure 2 may only state
 what figure 2's writer was given, and the build fails on an uncited sentence or
 an unsupported figure. The executive summary follows the shape the summary
