@@ -357,14 +357,13 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
         )
 
     from app.infra.llm import litellm_gateway
-    from app.services import query_service
 
     monkeypatch.setattr(litellm_gateway.LiteLLMGateway, "probe_embedding", probe)
     monkeypatch.setattr(
         litellm_gateway.LiteLLMGateway, "from_settings",
         classmethod(lambda cls, _settings: cls(timeout_seconds=1)),
     )
-    monkeypatch.setattr(query_service, "secret_box", lambda _settings: _Box())
+    monkeypatch.setattr(knowledge_service, "secret_box", lambda _settings: _Box())
     return seen
 
 
@@ -680,14 +679,13 @@ async def test_a_refused_probe_leaves_a_forced_re_index_with_its_index_intact(
         return _Capability(available=False, reason="Connection refused.")
 
     from app.infra.llm import litellm_gateway
-    from app.services import query_service
 
     monkeypatch.setattr(litellm_gateway.LiteLLMGateway, "probe_embedding", refuse)
     monkeypatch.setattr(
         litellm_gateway.LiteLLMGateway, "from_settings",
         classmethod(lambda cls, _settings: cls(timeout_seconds=1)),
     )
-    monkeypatch.setattr(query_service, "secret_box", lambda _settings: _Box())
+    monkeypatch.setattr(knowledge_service, "secret_box", lambda _settings: _Box())
 
     config = _config(name="openrouter")
     connection = _connection(

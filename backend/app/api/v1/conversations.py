@@ -34,8 +34,16 @@ from app.api.schemas import (
     RunStepRead,
     SuggestionsRead,
 )
+from app.charts import (
+    candidate_intent,
+    chart_options,
+    compile_vega_lite,
+    plan_chart,
+    profile_result,
+)
 from app.core.errors import DeepRefusedError, NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
+from app.domain.ports.database import ResultColumn
 from app.domain.value_objects import RunStatus
 from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.authz.compose import restrict
@@ -957,14 +965,6 @@ async def redraw_chart(
     place — this is the same rule stated twice, once where it is displayed and
     once where it would matter if the display were stale.
     """
-    from app.charts import (
-        candidate_intent,
-        chart_options,
-        compile_vega_lite,
-        plan_chart,
-        profile_result,
-    )
-    from app.domain.ports.database import ResultColumn
 
     run = await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
     # A redraw is a picture of stored rows, so it is the rows.

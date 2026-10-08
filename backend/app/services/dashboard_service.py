@@ -39,6 +39,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.charts import ChartIntent
 from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.context import RequestContext
@@ -1101,7 +1102,6 @@ def _chart_intent(tile: DashboardTile) -> Any:
     if not tile.chart_config:
         return None
 
-    from app.charts import ChartIntent
 
     try:
         return ChartIntent.model_validate(tile.chart_config)

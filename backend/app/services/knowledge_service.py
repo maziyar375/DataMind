@@ -93,7 +93,15 @@ from app.knowledge.matcher import (
     TemplateMatcher,
     trigrams,
 )
-from app.services.query_service import latest_snapshot
+from app.semantic import vocabulary_terms
+from app.services.query_service import (
+    EMBEDDING,
+    can_embed,
+    latest_snapshot,
+    resolve_llm,
+    secret_box,
+)
+from app.services.semantic_service import load_document
 
 log = get_logger(__name__)
 
@@ -826,7 +834,6 @@ async def _embedding_candidates(
     # the GIN index. It is also the predicate `resolve_llm` refuses on, so the
     # row this resolves to and the funnel behind it cannot disagree about what
     # a configuration is for.
-    from app.services.query_service import can_embed
 
     rows = [row for row in result.scalars().all() if can_embed(row)]
     pinned = connection.embedding_llm_config_id
@@ -863,7 +870,6 @@ async def embedding_provider(
     default model provider first" whatever anybody did, for every account,
     until migration `0022`.
     """
-    from app.services.query_service import can_embed
 
     if connection.embedding_llm_config_id is not None:
         row = await db.get(LlmConfig, connection.embedding_llm_config_id)
@@ -945,7 +951,6 @@ async def embedding_llm(
     `None` when the deployment has no provider that declares an embedding
     model — a state, not an error, and one the matcher reads as "lexical".
     """
-    from app.services.query_service import EMBEDDING, resolve_llm, secret_box
 
     config = await embedding_provider(db, connection)
     if config is None:
@@ -1179,7 +1184,6 @@ async def set_embeddings(
         )
 
     from app.infra.llm.litellm_gateway import LiteLLMGateway
-    from app.services.query_service import EMBEDDING, resolve_llm, secret_box
 
     llm = resolve_llm(config, secret_box(settings), purpose=EMBEDDING)
     gateway = LiteLLMGateway.from_settings(settings)
@@ -1630,8 +1634,6 @@ class FeedbackService:
         is off. A word the model is never shown is a word retrieval cannot
         resolve, whoever wrote it into the layer.
         """
-        from app.semantic import vocabulary_terms
-        from app.services.semantic_service import load_document
 
         snapshot = await latest_snapshot(self._db, connection.id)
         layer = await load_document(self._db, connection, snapshot=snapshot)

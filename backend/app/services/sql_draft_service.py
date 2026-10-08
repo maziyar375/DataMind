@@ -37,6 +37,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.charts import chart_options, plan_chart, profile_result, unchartable_reason
 from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.context import RequestContext
@@ -502,7 +503,6 @@ async def _chart_suggestion(
     if preview is None or preview.status != "OK" or len(preview.columns) < 2:
         return None, None
 
-    from app.charts import plan_chart, profile_result, unchartable_reason
 
     try:
         profile = profile_result(
@@ -558,7 +558,6 @@ def _chart_options(preview: TileResult | None) -> list[dict[str, Any]]:
     if preview is None or preview.status != "OK" or len(preview.columns) < 2:
         return []
 
-    from app.charts import chart_options, profile_result
 
     try:
         profile = profile_result(

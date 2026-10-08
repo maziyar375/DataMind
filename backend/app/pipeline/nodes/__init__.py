@@ -10,8 +10,17 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import Any, NamedTuple
 
+from app.charts import (
+    ChartIntent,
+    ResultProfile,
+    compile_vega_lite,
+    plan_chart,
+    plan_kpi,
+    profile_result,
+    unchartable_reason,
+)
 from app.core.clock import utcnow
 from app.core.errors import ConnectorError, LLMError
 from app.core.logging import get_logger
@@ -78,11 +87,9 @@ from app.pipeline.state import (
     SqlAttempt,
     TemplateExample,
 )
+from app.semantic import SemanticDocument, table_prose, table_terms
 from app.sqlguard import GuardPolicy, guard
 from app.sqlguard.validator import ValidationReport
-
-if TYPE_CHECKING:  # `app.charts` is imported lazily inside the nodes that use it
-    from app.charts import ChartIntent, ResultProfile
 
 log = get_logger(__name__)
 
@@ -927,7 +934,6 @@ def _layer_index(semantic: dict[str, Any] | None) -> _LayerIndex:
     """
     if not semantic:
         return _NO_LAYER
-    from app.semantic import SemanticDocument, table_prose, table_terms
 
     try:
         doc = SemanticDocument.model_validate(semantic)
@@ -1923,7 +1929,6 @@ def _start_chart_intent(state: RunState, deps: NodeDeps) -> None:
     idempotent: `present` can be re-entered by a restore edge, and a second
     head start would strand the first task.
     """
-    from app.charts import profile_result, unchartable_reason
 
     if state.chart_ahead is not None:
         return
@@ -2086,7 +2091,6 @@ async def propose_chart_intent(
     caller falls through to the deterministic shape heuristic. This function
     never raises `LLMError`.
     """
-    from app.charts import ChartIntent
 
     system = CHART_SYSTEM_COMPOSED if composed else CHART_SYSTEM
     template = CHART_USER_COMPOSED if composed else CHART_USER
@@ -2136,13 +2140,6 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
     result first, refuses outright when the data cannot say anything, repairs a
     salvageable intent, and falls back to the shape heuristic otherwise.
     """
-    from app.charts import (
-        compile_vega_lite,
-        plan_chart,
-        plan_kpi,
-        profile_result,
-        unchartable_reason,
-    )
 
     execution = state.execution
     if execution is None or execution.row_count == 0:

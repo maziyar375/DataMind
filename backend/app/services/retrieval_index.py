@@ -45,6 +45,10 @@ from app.pipeline.relevance import (
     prose_by_table,
     prose_fingerprint,
 )
+from app.semantic import table_prose
+from app.services.knowledge_service import embedding_llm
+from app.services.query_service import latest_snapshot
+from app.services.semantic_service import load_layer
 
 log = get_logger(__name__)
 
@@ -92,8 +96,6 @@ async def prose_for_connection(
     available here, because it has no symptom. Hence one function on each side
     and no second assembly of the bag.
     """
-    from app.services.query_service import latest_snapshot
-    from app.services.semantic_service import load_layer
 
     snapshot = await latest_snapshot(db, connection.id)
     tables = snapshot.get("tables") or []
@@ -102,7 +104,6 @@ async def prose_for_connection(
     layer = await load_layer(db, connection, snapshot=snapshot)
     prose: dict[str, tuple[str, ...]] = {}
     if layer.document is not None:
-        from app.semantic import table_prose
 
         prose = table_prose(layer.document)
     return prose_by_table(
@@ -170,7 +171,6 @@ async def index_schema_vectors(
         pending = pending[:MAX_TABLES_PER_PASS]
         out.truncated = True
 
-    from app.services.knowledge_service import embedding_llm
 
     llm = await embedding_llm(db, settings, connection)
     if llm is None:
@@ -304,7 +304,6 @@ def question_embedder(
 
     async def embed(texts: Any) -> list[list[float]]:
         from app.infra.llm.litellm_gateway import LiteLLMGateway
-        from app.services.knowledge_service import embedding_llm
 
         try:
             llm = await embedding_llm(db, settings, connection)

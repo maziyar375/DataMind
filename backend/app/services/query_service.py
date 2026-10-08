@@ -32,6 +32,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.charts import compile_vega_lite, plan_chart, plan_kpi, profile_result
 from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.context import RequestContext
@@ -526,7 +527,6 @@ def _chart(
     intent the data cannot support degrades to the table plus a note — never an
     error: the numbers are correct whatever picture was asked for.
     """
-    from app.charts import compile_vega_lite, plan_chart, profile_result
 
     if not rows or len(columns) < 2:
         return None, "none", None
@@ -554,7 +554,6 @@ def _kpi(
     component that knew nothing about the one answering the same question in
     chat. One planner is what keeps the two from drifting.
     """
-    from app.charts import plan_kpi, profile_result
 
     if not rows:
         return None

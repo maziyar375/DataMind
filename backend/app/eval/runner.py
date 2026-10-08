@@ -46,6 +46,7 @@ from app.domain.value_objects import (
 )
 from app.eval import dataset, metrics
 from app.eval.dataset import FixtureSpec, GoldRecord, NegativeRecord
+from app.eval.deep import evaluate_deep
 from app.eval.metrics import (
     OUTCOME_ERROR,
     OUTCOME_EXEC_FAILED,
@@ -60,12 +61,25 @@ from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import EvalResult, EvalRun, LlmConfig
 from app.infra.db.session import dispose_engine, get_sessionmaker
 from app.infra.llm.litellm_gateway import LiteLLMGateway
+from app.knowledge import KnowledgeTemplate, normalize_question
+from app.knowledge.embed import (
+    EmbeddingMatcher,
+    VectorEntry,
+    VectorIndex,
+    Vocabulary,
+    fingerprint,
+    mask_question,
+)
+from app.knowledge.matcher import FallbackMatcher, LexicalMatcher
 from app.pipeline import nodes
 from app.pipeline.nodes import NodeDeps
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
+from app.pipeline.prompts.deep import DEEP_PROMPT_VERSION
+from app.pipeline.relevance import TableVector, prose_by_table, prose_fingerprint
 from app.pipeline.relevance import VectorIndex as SchemaVectorIndex
 from app.pipeline.state import RunState
+from app.semantic import SemanticDocument, attribute, bind_layer, build_index, table_prose
 from app.sqlguard import GuardPolicy
 
 log = get_logger(__name__)
@@ -488,7 +502,6 @@ def _attribute_outcome(
     Fail open, as on the product path: an unreadable statement attributes
     nothing and costs the question nothing.
     """
-    from app.semantic import SemanticDocument, attribute, build_index
 
     if layer is None:
         return
@@ -527,7 +540,6 @@ def load_semantic(spec: FixtureSpec, snapshot: dict[str, Any]) -> dict[str, Any]
     quote. Better to refuse and say which entry. That is an eval policy, not a
     difference in binding: the product drops the same entries and answers.
     """
-    from app.semantic import bind_layer
 
     if spec.semantic_path is None:
         raise ValueError(f"fixture {spec.name} has no semantic layer to load")
@@ -612,7 +624,6 @@ def build_template_store(
     §5.2's gate would otherwise withhold every example under the fixture's own
     policy and the arm would measure nothing.
     """
-    from app.knowledge import KnowledgeTemplate, normalize_question
 
     return [
         KnowledgeTemplate(
@@ -650,15 +661,6 @@ def matcher_over(
     nobody ships — and the arm's recall delta has to be against what a customer
     would actually get.
     """
-    from app.knowledge.embed import (
-        EmbeddingMatcher,
-        VectorEntry,
-        VectorIndex,
-        Vocabulary,
-        fingerprint,
-        mask_question,
-    )
-    from app.knowledge.matcher import FallbackMatcher, LexicalMatcher
 
     excluded = uuid.uuid5(uuid.NAMESPACE_OID, exclude) if exclude else None
     kept = [t for t in templates if t.id != excluded]
@@ -748,12 +750,10 @@ async def embed_schema(
     what the product pays and an arm that skipped it would measure a
     configuration nobody runs.
     """
-    from app.pipeline.relevance import TableVector, prose_by_table, prose_fingerprint
 
     tables = snapshot.get("tables") or []
     layer: dict[str, tuple[str, ...]] = {}
     if semantic:
-        from app.semantic import SemanticDocument, table_prose
 
         try:
             layer = table_prose(SemanticDocument.model_validate(semantic))
@@ -816,7 +816,6 @@ async def embed_store(
     question that masks to text already in the map is answered from it, which
     keeps an arm to one provider call rather than one per record.
     """
-    from app.knowledge.embed import Vocabulary, mask_question
 
     vocabulary = Vocabulary.from_snapshot(snapshot, templates)
     masked = {str(t.id): mask_question(t.question, vocabulary) for t in templates}
@@ -1326,8 +1325,6 @@ async def _amain_deep(
     persisted like any other, filed under `DEEP_PROMPT_VERSION` beside the
     generator's: the planner's prompt and the SQL prompt version separately.
     """
-    from app.eval.deep import evaluate_deep
-    from app.pipeline.prompts.deep import DEEP_PROMPT_VERSION
 
     suite = dataset.load_deep_suite(args.suite)
     records = _select(list(suite.records), limit=args.limit, tag=args.tag)
@@ -1418,7 +1415,6 @@ async def _persist_deep(
     stay NULL: *not measured*, which is the truth for a suite with no gold,
     rather than a `False` that would read as a wrong answer.
     """
-    from app.pipeline.prompts.deep import DEEP_PROMPT_VERSION
 
     by_id = {r.id: r for r in records}
     sm = get_sessionmaker()

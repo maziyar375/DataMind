@@ -34,6 +34,7 @@ from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
 from app.infra.db.models import Role, RoleAssignment, Team, TeamMember, User
 from app.services import audit
+from app.services.role_service import ROLE, ROLE_ASSIGNED, ROLE_UNASSIGNED
 
 log = get_logger(__name__)
 
@@ -364,7 +365,6 @@ class TeamService:
         exactly what it says, and nothing about it is load-bearing for
         recovering a workspace.
         """
-        from app.services.role_service import ROLE, ROLE_ASSIGNED
 
         team = await self.get(team_id)
         role = await self._db.get(Role, role_id)
@@ -398,7 +398,6 @@ class TeamService:
     async def unassign_role(
         self, ctx: RequestContext, *, team_id: UUID, role_id: UUID
     ) -> None:
-        from app.services.role_service import ROLE, ROLE_UNASSIGNED
 
         team = await self.get(team_id)
         role = await self._db.get(Role, role_id)

@@ -55,6 +55,7 @@ from uuid import UUID
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.charts import ChartIntent
 from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.context import RequestContext
@@ -608,7 +609,6 @@ def _chart_intent(block: ReportBlock) -> Any:
     if not block.chart_config:
         return None
 
-    from app.charts import ChartIntent
 
     try:
         return ChartIntent.model_validate(block.chart_config)

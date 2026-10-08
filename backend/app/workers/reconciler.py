@@ -51,6 +51,8 @@ from sqlalchemy import text
 
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.infra.authz.owner_only import OWNED_TABLES
+from app.infra.db.models import Grant
 
 log = get_logger(__name__)
 
@@ -92,8 +94,6 @@ async def sweep_orphaned_grants(session) -> int:
     """
     from sqlalchemy import delete, select
 
-    from app.infra.authz.owner_only import OWNED_TABLES
-    from app.infra.db.models import Grant
 
     removed = 0
     for type_, table in OWNED_TABLES.items():

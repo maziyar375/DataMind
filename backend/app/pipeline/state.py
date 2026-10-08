@@ -26,6 +26,7 @@ from app.domain.ports.database import ResultColumn
 from app.domain.ports.llm import Usage, add_reported
 from app.domain.value_objects import DeepBudget, DisclosurePolicy, HintBudget
 from app.pipeline.checks import Finding
+from app.semantic import SemanticDocument, render_with_coverage
 from app.sqlguard.validator import ValidationReport
 
 # Types whose min/max is temporal rather than numeric. Kept here rather than
@@ -368,7 +369,6 @@ class RetrievedContext(BaseModel):
         """
         if not self.semantic:
             return "", set(), set()
-        from app.semantic import SemanticDocument, render_with_coverage
 
         try:
             doc = SemanticDocument.model_validate(self.semantic)

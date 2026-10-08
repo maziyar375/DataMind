@@ -36,12 +36,20 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from dataclasses import asdict
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.charts import (
+    candidate_intent,
+    chart_options,
+    compile_vega_lite,
+    plan_chart,
+    profile_result,
+)
 from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.context import RequestContext
@@ -55,6 +63,7 @@ from app.core.errors import (
 )
 from app.core.logging import get_logger
 from app.domain.ports.authz import Authorizer, ResourceRef
+from app.domain.ports.database import ResultColumn
 from app.domain.value_objects import (
     DisclosurePolicy,
     ReportFeasibility,
@@ -1099,16 +1108,7 @@ class ReportService:
         first place; this is the same rule stated where it would matter if the
         display were stale.
         """
-        from dataclasses import asdict
 
-        from app.charts import (
-            candidate_intent,
-            chart_options,
-            compile_vega_lite,
-            plan_chart,
-            profile_result,
-        )
-        from app.domain.ports.database import ResultColumn
 
         await self.run(ctx, report_id, run_id, Privilege.MODIFY)
         found = await self._db.execute(
