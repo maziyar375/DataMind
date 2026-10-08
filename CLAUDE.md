@@ -334,7 +334,9 @@ frontend/src/
                             bullets — read at display time into spans, never
                             into markup; `npm run test:chat`),
                             settings.tsx, semantic.tsx (the layer
-                            editor), semantic-history.tsx (its versions, one
+                            editor; one entity opened is semantic-entity.tsx,
+                            the Generate dialog semantic-generate.tsx, what
+                            they share semantic-parts.tsx), semantic-history.tsx (its versions, one
                             version's changes, restore — `useMatch`
                             sub-routes of the tab), semantic-publish.tsx
                             (publishing the draft: its change list, the note a
