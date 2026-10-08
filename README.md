@@ -30,6 +30,8 @@
 </p>
 
 <p align="center">
+  <a href="#product-tour">Product tour</a> ·
+  <a href="https://maziyar375.github.io/DataMind/">Live demo</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#what-works-today">Features</a> ·
   <a href="#two-things-are-never-left-to-the-model">Security</a> ·
@@ -63,6 +65,26 @@ same, the dialect is the connector's problem.
 They are one path, so they connect: an answer worth keeping becomes a dashboard
 tile or a report figure in a click, carrying the statement that already ran
 rather than asking the question again.
+
+
+## Product tour
+
+<!-- The video goes on the line below this comment. On github.com, edit this
+     file, drag DataMind-product-tour-EN.mp4 onto that line and commit: GitHub
+     uploads it and inserts a https://github.com/user-attachments/assets/… link,
+     which it renders as a player. A committed .mp4 would only render as a link.
+     See docs/tour/README.md. -->
+
+A four-and-a-half-minute walkthrough: asking a question, the disclosure policy
+that decides what reaches the model, the SQL guard, dashboards, reports, taught
+questions and the administration screens. It was recorded from the
+[live demo](https://maziyar375.github.io/DataMind/), which runs the real app in
+your browser against sample data, with nothing to install.
+
+<p align="center">
+  <a href="docs/tour/DataMind-product-tour.pdf"><img src="docs/tour/poster.jpg" alt="DataMind product tour: the title slide" width="720"></a><br>
+  <sub>The same tour as eleven slides: <a href="docs/tour/DataMind-product-tour.pdf">docs/tour/DataMind-product-tour.pdf</a></sub>
+</p>
 
 
 ## Two things are never left to the model

@@ -140,6 +140,9 @@ that the code does not, and each names the document that replaced it.
   afterwards. Nothing in here is prose — skip it when searching.
 - [`screenshots/`](screenshots/) — the three images the root README embeds, with
   a note on how to re-capture them.
+- [`tour/`](tour/) — the product tour the root README links: an eleven-slide
+  PDF and its poster. The video itself is uploaded on github.com, not
+  committed; the folder's README says why.
 - `backend/app/eval/reports/` and `backend/app/eval/suites/CHANGELOG.md` live
   beside the code that produces them. The reports are write-ups of past eval
   runs; the changelog is the frozen golden set's correction log. Both are
