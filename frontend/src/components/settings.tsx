@@ -714,3 +714,11 @@ export function StatusLine({ ok, children }: { ok: boolean; children: React.Reac
     </div>
   )
 }
+
+/** What a stored row's `status` says, in the words the chips and dots use —
+ * the same three for a connection and a model provider. */
+export function reachability(status: string): { tone: 'green' | 'red' | 'neutral'; label: string } {
+  if (status === 'OK') return { tone: 'green', label: 'Reachable' }
+  if (status === 'ERROR') return { tone: 'red', label: 'Unreachable' }
+  return { tone: 'neutral', label: 'Untested' }
+}

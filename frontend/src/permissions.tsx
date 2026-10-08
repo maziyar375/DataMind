@@ -162,7 +162,6 @@ export interface Access {
   share: boolean
 }
 
-export const FULL_ACCESS: Access = { view: true, edit: true, delete: true, share: true }
 export const NO_ACCESS: Access = { view: false, edit: false, delete: false, share: false }
 
 export function accessOf(privileges: readonly string[] | null | undefined): Access {

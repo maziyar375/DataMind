@@ -46,7 +46,7 @@ import {
 } from '../components/ui'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
-  StatusLine, Tabs, UnsavedNote,
+  StatusLine, Tabs, UnsavedNote, reachability,
 } from '../components/settings'
 import { AccessPanel, ReachBadge, TransferControl } from '../components/access'
 import { useCan, useFeature } from '../permissions'
@@ -59,13 +59,6 @@ import { forConnection } from '../components/knowledge-queue'
 import { SectionsTab } from '../components/sections'
 import { SemanticLayerTab } from '../components/semantic'
 import { DATABASE_TYPES } from '../theme/tokens'
-
-/** What a stored row's `status` says, in the words the chips and dots use. */
-function reachability(status: string): { tone: 'green' | 'red' | 'neutral'; label: string } {
-  if (status === 'OK') return { tone: 'green', label: 'Reachable' }
-  if (status === 'ERROR') return { tone: 'red', label: 'Unreachable' }
-  return { tone: 'neutral', label: 'Untested' }
-}
 
 const BLANK = {
   name: 'New connection',

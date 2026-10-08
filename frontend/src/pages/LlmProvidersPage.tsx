@@ -77,7 +77,7 @@ import {
 import type { ParamDrafts, ParamSpec } from '../components/provider-params'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
-  StatusLine, Tabs, UnsavedNote,
+  StatusLine, Tabs, UnsavedNote, reachability,
 } from '../components/settings'
 import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { PROVIDER_URLS } from '../theme/tokens'
@@ -135,13 +135,6 @@ const PROVIDER_HUES: Record<string, number> = {
 
 function providerHue(provider: string): number {
   return PROVIDER_HUES[provider] ?? identityHue(provider)
-}
-
-/** What a stored row's `status` says, in the words the chips and dots use. */
-function reachability(status: string): { tone: 'green' | 'red' | 'neutral'; label: string } {
-  if (status === 'OK') return { tone: 'green', label: 'Reachable' }
-  if (status === 'ERROR') return { tone: 'red', label: 'Unreachable' }
-  return { tone: 'neutral', label: 'Untested' }
 }
 
 

@@ -285,26 +285,6 @@ export function keyFigures(sections: DocumentSection[], limit = 4): KeyFigure[] 
   return figures.slice(0, limit)
 }
 
-/** How far along a run is, as the header renders it. */
-export interface RunProgress {
-  /** 0–100, and never runs backwards past the total the run declared. */
-  percent: number
-  current: number
-  total: number
-  phase: string
-}
-
-export function progressOf(run: ReportRunDetail): RunProgress {
-  const total = Math.max(run.progress_total, 0)
-  const current = Math.min(Math.max(run.progress_current, 0), total || run.progress_current)
-  return {
-    percent: total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0,
-    current,
-    total,
-    phase: run.phase,
-  }
-}
-
 /**
  * The chart type a stored spec was drawn as.
  *

@@ -1747,14 +1747,16 @@ export function initialOf(value: string): string {
  * leave it out for the neutral panel tone (used where the tile sits beside a
  * heading that already names the thing).
  */
-export const IDENTITY_HUES = [250, 300, 340, 25, 80, 160]
+export const IDENTITY_HUES: readonly number[] = [250, 300, 340, 25, 80, 160]
 
-export function identityHue(seed: string): number {
+/** A stable hue for `seed`, picked from `hues` — the one hash every card,
+ * avatar and list tile uses, so a record keeps its colour across screens. */
+export function identityHue(seed: string, hues: readonly number[] = IDENTITY_HUES): number {
   let hash = 0
   for (let index = 0; index < seed.length; index += 1) {
     hash = (hash * 31 + seed.charCodeAt(index)) >>> 0
   }
-  return IDENTITY_HUES[hash % IDENTITY_HUES.length]
+  return hues[hash % hues.length]
 }
 
 /**

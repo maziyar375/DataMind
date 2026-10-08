@@ -29,7 +29,7 @@ import { ReportRunHistory } from '../components/report-history'
 import {
   Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, MetaDot,
   Modal, PageHeader, PrimaryButton, SearchField, Segmented, Spinner, TextArea,
-  TextInput, glyphTint, relativeTime,
+  TextInput, glyphTint, identityHue, relativeTime,
 } from '../components/ui'
 
 /** The policies a report can be written from — the frontend half of §7. */
@@ -566,15 +566,10 @@ function toCard(report: Report): ReportSummary {
 }
 
 // ── one card ──────────────────────────────────────────────────────────────
-const CARD_HUES = [265, 210, 150, 25, 330, 190]
+/** Reports draw from their own hues, so a report card never wears a dashboard's. */
+const REPORT_HUES = [265, 210, 150, 25, 330, 190]
 
-function cardHue(id: string): number {
-  let hash = 0
-  for (let index = 0; index < id.length; index += 1) {
-    hash = (hash * 31 + id.charCodeAt(index)) >>> 0
-  }
-  return CARD_HUES[hash % CARD_HUES.length]
-}
+const cardHue = (id: string): number => identityHue(id, REPORT_HUES)
 
 function ReportCard({
   report, onOpen, onRename, onArchive, onDelete, onShare,

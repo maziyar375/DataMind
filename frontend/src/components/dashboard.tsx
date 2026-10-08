@@ -30,7 +30,9 @@ import { Restricted } from './access'
 import { accessOf, useCan } from '../permissions'
 import { dueTileIds } from './dashboard-schedule'
 import type { Dashboard, DashboardSummary, DashboardTile, TileResult } from '../api/types'
-import { Chip, Dot, ErrorNote, Icon, Kpi, ResultTable, Spinner, glyphTint, relativeTime } from './ui'
+import {
+  Chip, Dot, ErrorNote, Icon, Kpi, ResultTable, Spinner, glyphTint, identityHue, relativeTime,
+} from './ui'
 import { VegaChart } from './VegaChart'
 
 // ── refresh rates ─────────────────────────────────────────────────────────
@@ -1113,15 +1115,7 @@ function NumberSetting({
  * occupies the most valuable strip of a card and answers no question is worse
  * than no decoration, so the space went back to the facts.
  */
-const CARD_HUES = [250, 300, 340, 25, 80, 160]
-
-function cardHue(id: string): number {
-  let hash = 0
-  for (let index = 0; index < id.length; index += 1) {
-    hash = (hash * 31 + id.charCodeAt(index)) >>> 0
-  }
-  return CARD_HUES[hash % CARD_HUES.length]
-}
+const cardHue = (id: string): number => identityHue(id)
 
 /**
  * The dashboard's glyph, tinted with its identity hue.
