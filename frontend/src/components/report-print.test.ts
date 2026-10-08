@@ -132,8 +132,8 @@ for (const selector of ['html', 'body', '#root', '.rm-app', '.rm-app-row',
 const appTsx = readFileSync(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8')
 check('the shell row still carries the class the rule names', /"rm-app-row"/.test(appTsx), true)
 check('and so does the view box', /"rm-app-view"/.test(appTsx), true)
-const reportTsx = readFileSync(fileURLToPath(new URL('./report.tsx', import.meta.url)), 'utf8')
-check('and the run viewer', /"rm-report-view"/.test(reportTsx), true)
+const viewerTsx = readFileSync(fileURLToPath(new URL('./report-viewer.tsx', import.meta.url)), 'utf8')
+check('and the run viewer', /"rm-report-view"/.test(viewerTsx), true)
 
 // ── the order the handoff hangs on ───────────────────────────────────────
 // `window.print()` blocks in Chrome and Firefox and `afterprint` fires before
@@ -224,7 +224,7 @@ check(
 // patterns, so the article declares its own.
 check(
   'the article declares the language the hyphenator reads',
-  /lang=\{language\}/.test(reportTsx),
+  /lang=\{language\}/.test(viewerTsx),
   true,
 )
 
@@ -234,7 +234,7 @@ check(
 // inside the article. Sized in millimetres rather than px: the source is a
 // 1024px raster, and asking for 8mm of it is what keeps it a print resolution
 // instead of a screen one.
-check('the cover carries the mark', /<Brandmark \/>/.test(reportTsx), true)
+check('the cover carries the mark', /<Brandmark \/>/.test(viewerTsx), true)
 check(
   'and print gives the lockup a size of its own',
   /\.rm-report-brand[^{]*\{[^}]*\}/.test(printCss),
@@ -251,15 +251,15 @@ check(
 // the component without renaming it here reverts that element to screen size
 // on paper and nowhere else, which is invisible until a PDF is sent out.
 for (const [cls, where] of [
-  ['rm-report-title', reportTsx],
-  ['rm-report-heading', reportTsx],
-  ['rm-report-prose', reportTsx],
-  ['rm-report-caption', reportTsx],
+  ['rm-report-title', viewerTsx],
+  ['rm-report-heading', viewerTsx],
+  ['rm-report-prose', viewerTsx],
+  ['rm-report-caption', viewerTsx],
   // A callout is the one block that is deliberately *not* a figure, so it is
   // the one whose print size no `.rm-report-figure` rule would cover for it.
-  ['rm-report-callout', reportTsx],
-  ['rm-report-source', reportTsx],
-  ['rm-report-sql', reportTsx],
+  ['rm-report-callout', viewerTsx],
+  ['rm-report-source', viewerTsx],
+  ['rm-report-sql', viewerTsx],
   ['rm-kpi-value', readFileSync(fileURLToPath(new URL('./ui.tsx', import.meta.url)), 'utf8')],
   ['rm-table', readFileSync(fileURLToPath(new URL('./ui.tsx', import.meta.url)), 'utf8')],
 ] as const) {

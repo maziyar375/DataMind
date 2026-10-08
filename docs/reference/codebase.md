@@ -402,7 +402,8 @@ the puzzle-piece `Logo`, `ResultTable`, `Kpi`), chat (`chat.tsx` + the DOM-free
 (`dashboard.tsx`, `tile-editor.tsx`, `dashboard-transfer.tsx`), the semantic
 layer editor (`semantic.tsx`, 2.9k lines), the knowledge/curation surface
 (`knowledge.tsx`, 1.9k lines, plus the DOM-free `knowledge-template.ts`),
-reports (`report.tsx`, 4k lines, plus `report-history.tsx`), settings
+reports (`report.tsx` the editor, `report-viewer.tsx` the document, plus
+`report-history.tsx`), settings
 scaffolding, and three shell-level pieces: `answer-destinations.tsx` (turning a
 chat answer into a tile or a report block), `notifications.tsx` (the one
 `aria-live` surface, for work that outlives the screen that started it) and

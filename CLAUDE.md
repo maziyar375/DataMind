@@ -391,8 +391,10 @@ frontend/src/
                             JSON value a provider's API takes — DOM-free,
                             `npm run test:params`), notifications.tsx (the
                             shell's one aria-live surface),
-                            report.tsx (the outline editor + the document
-                            viewer), report-history.tsx, report-document.ts
+                            report.tsx (the outline editor),
+                            report-viewer.tsx (the document viewer),
+                            report-parts.tsx (what both draw),
+                            report-history.tsx, report-document.ts
                             (merging a run into a document — `npm run
                             test:report`), report-readiness.ts (what generating
                             an outline now would produce — what the Generate

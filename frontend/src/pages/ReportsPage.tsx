@@ -24,7 +24,8 @@ import { ApiError, connections as connectionsApi, llmConfigs as modelsApi, repor
 import type { Connection, LlmConfig, Report, ReportSummary } from '../api/types'
 import { AccessPanel, TransferControl } from '../components/access'
 import { accessOf, queryable, useCan } from '../permissions'
-import { ReportOutlineEditor, ReportRunViewer, reportWarn } from '../components/report'
+import { ReportOutlineEditor, reportWarn } from '../components/report'
+import { ReportRunViewer } from '../components/report-viewer'
 import { ReportRunHistory } from '../components/report-history'
 import {
   Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, MetaDot,

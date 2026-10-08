@@ -524,7 +524,9 @@ added.
 
 ```
 pages/ReportsPage.tsx        list, create, rename, delete, archive
-components/report.tsx        the outline editor and the document viewer
+components/report.tsx        the outline editor
+components/report-viewer.tsx the document viewer
+components/report-parts.tsx  the pieces both draw: back button, toolbar, labels, note
 components/report-history.tsx   run history, from the editor and the viewer
 components/report-document.ts   merging a run into a document (+ .test.ts)
 components/report-print.ts      the print handoff (+ .test.ts)
