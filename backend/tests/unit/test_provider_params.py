@@ -366,11 +366,24 @@ def test_embedding_parameters_ride_the_embedding_request_and_not_the_chat_one() 
     assert "dimensions" not in gateway._kwargs(llm, MESSAGES)
 
 
-def test_a_test_reports_what_the_provider_will_actually_accept() -> None:
+def test_a_test_reports_what_the_provider_will_actually_accept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`drop_params` makes an unsupported parameter silent at request time.
     Silence is right for a request and wrong for a test: a configuration that
     stores `reasoning_effort` against a model that has no such thing should say
-    so on the screen where it was typed."""
+    so on the screen where it was typed.
+
+    *Which* parameters a model takes is litellm's table, and it moves between
+    releases — `reasoning_effort` on `gpt-4o-mini` was dropped until litellm
+    started passing it through for every OpenAI model, and this test went red
+    on an unpinned install for a reason that had nothing to do with the
+    gateway. So the table is stubbed, and what is pinned is the gateway's half:
+    what litellm keeps is applied, what it drops is reported by name."""
+    def table(*, model: str, custom_llm_provider: str, **params: Any) -> dict[str, Any]:
+        return {k: v for k, v in params.items() if k != "reasoning_effort"}
+
+    monkeypatch.setattr(litellm.utils, "get_optional_params", table)
     gateway = LiteLLMGateway(timeout_seconds=60)
     applied, dropped = gateway.applied_params(
         _llm(params={"seed": 7, "reasoning_effort": "low"})
@@ -379,6 +392,18 @@ def test_a_test_reports_what_the_provider_will_actually_accept() -> None:
     assert dropped == ["reasoning_effort"]
 
     assert gateway.applied_params(_llm()) == ({}, [])
+
+
+def test_the_installed_litellm_splits_every_parameter_one_way_or_the_other() -> None:
+    """The same question against the real table, asked so it holds on any
+    release: every configured parameter is either applied or reported dropped,
+    never both and never neither."""
+    params = {"seed": 7, "reasoning_effort": "low", "top_p": 0.5}
+    applied, dropped = LiteLLMGateway(timeout_seconds=60).applied_params(
+        _llm(params=params)
+    )
+    assert set(applied).isdisjoint(dropped)
+    assert set(applied) | set(dropped) == set(params)
 
 
 # ── and the API stores exactly what it validated ─────────────────────────
