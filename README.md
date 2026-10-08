@@ -69,21 +69,22 @@ rather than asking the question again.
 
 ## Product tour
 
-<!-- The video goes on the line below this comment. On github.com, edit this
-     file, drag DataMind-product-tour-EN.mp4 onto that line and commit: GitHub
-     uploads it and inserts a https://github.com/user-attachments/assets/… link,
-     which it renders as a player. A committed .mp4 would only render as a link.
-     See docs/tour/README.md. -->
+<!-- GitHub strips <video> tags, so the thumbnail below links to the file. For a
+     player inline in this page instead: edit this file on github.com, drag
+     docs/media/product-tour.mp4 onto this spot (it is under GitHub's 10 MB
+     upload limit), and commit. See docs/media/README.md. -->
+
+<p align="center">
+  <a href="docs/media/product-tour.mp4"><img src="docs/media/product-tour.jpg" alt="Watch the DataMind product tour (4:29)" width="800"></a>
+</p>
 
 A four-and-a-half-minute walkthrough: asking a question, the disclosure policy
 that decides what reaches the model, the SQL guard, dashboards, reports, taught
-questions and the administration screens. It was recorded from the
-[live demo](https://maziyar375.github.io/DataMind/), which runs the real app in
-your browser against sample data, with nothing to install.
+questions and the administration screens.
 
 <p align="center">
-  <a href="docs/tour/DataMind-product-tour.pdf"><img src="docs/tour/poster.jpg" alt="DataMind product tour: the title slide" width="720"></a><br>
-  <sub>The same tour as eleven slides: <a href="docs/tour/DataMind-product-tour.pdf">docs/tour/DataMind-product-tour.pdf</a></sub>
+  <a href="https://maziyar375.github.io/DataMind/"><strong>▶ Try the live demo</strong></a><br>
+  <sub>The real app, running in your browser against sample data. Nothing to install; the tour was recorded from it.</sub>
 </p>
 
 
