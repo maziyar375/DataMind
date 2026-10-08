@@ -25,18 +25,18 @@
  *   control always has a refusal behind it.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { roles as rolesApi, serviceAccounts as api } from '../api/client'
-import type { Role, ServiceAccount, ServiceKey } from '../api/types'
+import { roles as rolesApi, serviceAccounts as api } from '../../api/client'
+import type { Role, ServiceAccount, ServiceKey } from '../../api/types'
 import {
   Chip, DangerButton, ErrorNote, Field, GhostButton, GlyphBadge, Icon, Modal,
   PrimaryButton, SecretOncePanel, Select, Spinner, TextArea, TextInput,
   relativeTime,
-} from '../components/ui'
+} from '../../components/ui'
 import {
   DetailBody, DetailHeader, MasterColumn, MasterItem, Section,
-} from '../components/settings'
-import { EffectiveAccess } from '../components/access'
-import { useCan } from '../permissions'
+} from '../../components/settings'
+import { EffectiveAccess } from '../../components/access'
+import { useCan } from '../../permissions'
 
 /**
  * The four capabilities a leaked key must not reach.

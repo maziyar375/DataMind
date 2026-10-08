@@ -27,12 +27,12 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { access, connections as connectionsApi, dashboards as dashboardsApi,
-  reports as reportsApi, teams as teamsApi, users as usersApi } from '../api/client'
-import type { Connection, DashboardSummary, Reach, ReportSummary, Team, User } from '../api/types'
+  reports as reportsApi, teams as teamsApi, users as usersApi } from '../../api/client'
+import type { Connection, DashboardSummary, Reach, ReportSummary, Team, User } from '../../api/types'
 import {
   Chip, EmptyState, ErrorNote, Field, GhostButton, Icon, Select,
   Spinner, initialOf, saveCsv,
-} from '../components/ui'
+} from '../../components/ui'
 
 type Lens = 'principal' | 'resource'
 

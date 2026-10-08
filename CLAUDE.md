@@ -421,7 +421,8 @@ frontend/src/
                             badge — red for a flag somebody raised, amber for
                             a backlog), Admin (`/admin` — master-detail over
                             six tabs: People, Service accounts, Teams, Roles,
-                            Access review, Audit. `/users` redirects here, to
+                            Access review, Audit, one file each under
+                            `pages/admin/`. `/users` redirects here, to
                             /admin/people), Account (`/settings` — your own
                             display name and password, the only two things a
                             member may change about themselves), About (who

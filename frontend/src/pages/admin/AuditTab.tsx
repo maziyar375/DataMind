@@ -32,12 +32,12 @@
  * renderer with a case per action would be a second copy of the vocabulary.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { audit as api, users as usersApi } from '../api/client'
-import type { AuditEntry, User } from '../api/types'
+import { audit as api, users as usersApi } from '../../api/client'
+import type { AuditEntry, User } from '../../api/types'
 import {
   Chip, ErrorNote, Field, GhostButton, Icon, Select, Spinner,
   initialOf, relativeTime,
-} from '../components/ui'
+} from '../../components/ui'
 
 /** One page. The log grows without bound, so there is no "everything". */
 const PAGE = 100

@@ -27,16 +27,16 @@
  * identical quietly stop matching.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { roles as api } from '../api/client'
-import type { CapabilityEntry, Role, ScopedPrivilege } from '../api/types'
+import { roles as api } from '../../api/client'
+import type { CapabilityEntry, Role, ScopedPrivilege } from '../../api/types'
 import {
   Chip, DangerButton, ErrorNote, Field, GhostButton, GlyphBadge, Icon, Modal,
   PrimaryButton, Spinner, TextArea, TextInput,
-} from '../components/ui'
+} from '../../components/ui'
 import {
   DetailBody, DetailHeader, MasterColumn, MasterItem, Section,
-} from '../components/settings'
-import { useCan } from '../permissions'
+} from '../../components/settings'
+import { useCan } from '../../permissions'
 
 /** The five rungs, weakest first — the lattice, in the order it is read. */
 const PRIVILEGES = ['describe', 'select', 'modify', 'delete', 'manage'] as const

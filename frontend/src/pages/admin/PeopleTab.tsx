@@ -21,15 +21,15 @@
  * says so, and every destructive act is confirmed before it happens.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { roles as rolesApi, users as api } from '../api/client'
-import type { Role as RoleRecord, Team as TeamRecord, User } from '../api/types'
+import { roles as rolesApi, users as api } from '../../api/client'
+import type { Role as RoleRecord, Team as TeamRecord, User } from '../../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton,
-  GlyphBadge, Icon, MetaDot, Modal, PageHeader, PrimaryButton, SearchField,
+  GlyphBadge, Icon, Modal, PrimaryButton, SearchField,
   SecretOncePanel, Segmented, Select, Spinner, TextInput, identityHue, initialOf,
-} from '../components/ui'
-import { EffectiveAccess } from '../components/access'
-import { useCan } from '../permissions'
+} from '../../components/ui'
+import { EffectiveAccess } from '../../components/access'
+import { useCan } from '../../permissions'
 
 type Status = 'ACTIVE' | 'INVITED' | 'DISABLED'
 /**
@@ -83,21 +83,12 @@ function sortUsers(users: User[], key: SortKey): User[] {
   })
 }
 
-export default function UsersPage({
-  currentUser, embedded = false,
-}: {
-  currentUser: User
-  /**
-   * Rendered as the People tab of `/admin` rather than as a page of its own.
-   *
-   * The Administration section already carries the page's title and its tab
-   * strip, so this drops its own `PageHeader` and moves the one action it
-   * needs — Add user — into the toolbar. Everything else about the screen is
-   * identical, which is the point: the list, its filters, its empty states and
-   * its dialogs were right before the section existed and are right inside it.
-   */
-  embedded?: boolean
-}) {
+/**
+ * The People tab of `/admin`. The Administration section carries the page's
+ * title and its tab strip, so the one action this tab needs — Add user — rides
+ * at the end of its own toolbar.
+ */
+export default function PeopleTab({ currentUser }: { currentUser: User }) {
   const can = useCan()
   const mayManage = can('user.manage')
   // `null` is "not read yet", which is what the skeleton renders for. An empty
@@ -185,54 +176,12 @@ export default function UsersPage({
 
   return (
     <div
-      // Embedded, the wash belongs to the section around it (`rm-section`),
-      // which throws one from above the title rather than six from below the
-      // strip; the gutter is the section's 32 so the list lines up under the
-      // tab that opened it. Standalone — a route that only the /users redirect
-      // can still reach — it is an index page like Dashboards and paints its
-      // own.
-      // Embedded, the wash belongs to the section around it (`rm-section`),
-      // which throws one from above the title rather than six from below the
-      // strip — but the gutter is `rm-page-pad`'s either way, so this tab, the
-      // Audit log and Access review beside it all start on the same edge and
-      // narrow together. Standalone — a route only the /users redirect can
-      // still reach — it is an index page like Dashboards and paints its own.
-      className={embedded ? 'rm-page-pad' : 'rm-index rm-page-pad'}
+      // The wash belongs to the section around it (`rm-section`); the gutter
+      // is `rm-page-pad`'s, so this tab, the Audit log and Access review beside
+      // it all start on the same edge and narrow together.
+      className="rm-page-pad"
       style={{ flex: 1, overflowY: 'auto' }}
     >
-      {!embedded && (
-      <PageHeader
-        title="Users"
-        subtitle={
-          list === null || list.length === 0 ? (
-            'Who can sign in to this workspace, what they may change, and how they get a password.'
-          ) : (
-            <>
-              <strong style={{ color: 'var(--text-strong)', fontWeight: 600 }}>
-                {stats.total}
-              </strong>
-              {` ${stats.total === 1 ? 'person' : 'people'}`}
-              <MetaDot />
-              {`${stats.admins} ${stats.admins === 1 ? 'admin' : 'admins'}`}
-              {stats.invited > 0 && (
-                <>
-                  <MetaDot />
-                  {`${stats.invited} invited`}
-                </>
-              )}
-            </>
-          )
-        }
-        actions={
-          mayManage ? (
-            <PrimaryButton style={{ padding: '10px 17px' }} onClick={() => setAdding(true)}>
-              <Icon.Plus /> Add user
-            </PrimaryButton>
-          ) : undefined
-        }
-      />
-      )}
-
       {error && <div style={{ marginBottom: 14 }}><ErrorNote>{error}</ErrorNote></div>}
 
       {invite && <InvitePanel invite={invite} onDismiss={() => setInvite(null)} />}
@@ -319,7 +268,7 @@ export default function UsersPage({
             {/* Inside the section the page header belongs to Administration,
                 so the one thing this tab adds to the workspace rides at the
                 end of its own toolbar rather than disappearing. */}
-            {embedded && mayManage && (
+            {mayManage && (
               <PrimaryButton onClick={() => setAdding(true)}>
                 <Icon.Plus /> Add user
               </PrimaryButton>

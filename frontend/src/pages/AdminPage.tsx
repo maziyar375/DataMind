@@ -29,12 +29,12 @@ import type { User } from '../api/types'
 import { PageHeader } from '../components/ui'
 import { Tabs } from '../components/settings'
 import { useCan, type Capability } from '../permissions'
-import AccessReviewTab from './AccessReviewTab'
-import AuditTab from './AuditTab'
-import RolesTab from './RolesTab'
-import ServiceAccountsTab from './ServiceAccountsTab'
-import TeamsTab from './TeamsTab'
-import UsersPage from './UsersPage'
+import AccessReviewTab from './admin/AccessReviewTab'
+import AuditTab from './admin/AuditTab'
+import RolesTab from './admin/RolesTab'
+import ServiceAccountsTab from './admin/ServiceAccountsTab'
+import TeamsTab from './admin/TeamsTab'
+import PeopleTab from './admin/PeopleTab'
 
 interface TabSpec {
   value: string
@@ -45,8 +45,8 @@ interface TabSpec {
    * The line under the section title while this tab is open.
    *
    * It lives here rather than in the tab, because the section already carries
-   * the title and the strip — the same bargain `UsersPage`'s `embedded` flag
-   * struck, extended to the two tabs that arrived later and kept a standalone
+   * the title and the strip — the same bargain the People tab struck by
+   * leaving its page header to the section, extended to the two tabs that arrived later and kept a standalone
    * page's chrome. The Audit log and Access review each drew a second <h1> of
    * the same size directly under "Administration", which reads as two pages
    * stacked rather than one section with a tab open. Their own sentences are
@@ -177,7 +177,7 @@ export default function AdminPage({ user }: { user: User }) {
           wrapper that scrolled for both would give the roles list a second
           scrollbar inside the one it already has. */}
       {active.value === 'people' ? (
-        <UsersPage currentUser={user} embedded />
+        <PeopleTab currentUser={user} />
       ) : active.value === 'roles' ? (
         <RolesTab />
       ) : active.value === 'teams' ? (

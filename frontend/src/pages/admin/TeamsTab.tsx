@@ -24,17 +24,17 @@
  *   it in the name-and-description form would make it look like a rename.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { roles as rolesApi, teams as api, users as usersApi } from '../api/client'
-import type { Role, Team, User } from '../api/types'
+import { roles as rolesApi, teams as api, users as usersApi } from '../../api/client'
+import type { Role, Team, User } from '../../api/types'
 import {
   Chip, DangerButton, ErrorNote, Field, GhostButton, GlyphBadge, Icon, Modal,
   PrimaryButton, SearchField, Select, Spinner, TextArea, TextInput, initialOf,
-} from '../components/ui'
+} from '../../components/ui'
 import {
   DetailBody, DetailHeader, MasterColumn, MasterItem, Section,
-} from '../components/settings'
-import { EffectiveAccess } from '../components/access'
-import { useCan } from '../permissions'
+} from '../../components/settings'
+import { EffectiveAccess } from '../../components/access'
+import { useCan } from '../../permissions'
 
 export default function TeamsTab() {
   const can = useCan()
