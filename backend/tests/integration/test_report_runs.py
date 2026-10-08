@@ -228,6 +228,7 @@ class FakeSnapshotRow:
         self.dialect = SNAPSHOT["dialect"]
         self.version = 1
         self.catalog_meta: dict[str, Any] = {}
+        self.created_at = None
 
 
 class FakeGateway:

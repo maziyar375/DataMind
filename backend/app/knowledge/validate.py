@@ -35,7 +35,7 @@ import sqlglot
 from pydantic import BaseModel, ConfigDict, Field
 from sqlglot import expressions as exp
 
-from app.knowledge.models import KnowledgeTemplate, TemplateParam
+from app.knowledge.models import KnowledgeTemplate
 from app.knowledge.params import placeholder
 from app.sqlguard import GuardPolicy, guard
 from app.sqlguard.validator import ValidationIssue, ValidationReport
@@ -187,8 +187,3 @@ def policy_from_tables(
         allowed_tables=allowed_tables,
         allowed_columns=allowed_columns,
     )
-
-
-def describe_params(params: list[TemplateParam]) -> str:
-    """`region=EMEA, year=2026`-style summary, for a log line or a badge."""
-    return ", ".join(f"{p.name}:{p.type}" for p in params)

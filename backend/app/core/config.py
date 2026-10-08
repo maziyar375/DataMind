@@ -194,10 +194,6 @@ class Settings(BaseSettings):
     # so the suite runs in one command (falls back to the sole config if unset).
     eval_llm_config_id: str | None = None
 
-    @property
-    def is_production(self) -> bool:
-        return self.environment == "production"
-
 
 @lru_cache
 def get_settings() -> Settings:

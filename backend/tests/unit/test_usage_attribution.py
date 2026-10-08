@@ -465,3 +465,4 @@ class _Snapshot:
     dialect = "postgres"
     version = 1
     catalog_meta: dict[str, Any] = {}
+    created_at = None

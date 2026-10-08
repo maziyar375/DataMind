@@ -63,7 +63,6 @@ from app.infra.db.models import (
     DatabaseConnection,
     KnowledgeTemplateRow,
     LlmConfig,
-    SchemaSnapshotRow,
     SchemaTableVector,
     User,
 )
@@ -93,6 +92,7 @@ from app.services.knowledge_service import (
     set_embeddings,
 )
 from app.services.policy import require
+from app.services.query_service import latest_snapshot_version
 from app.services.retrieval_index import prose_for_connection
 from app.workers.knowledge_maintenance import run_maintenance
 
@@ -219,7 +219,7 @@ async def list_templates(
             stale.append(row.id)
 
     snapshot_version = max((r.schema_version for r in rows), default=0)
-    current = await _snapshot_version(db, connection_id)
+    current = await latest_snapshot_version(db, connection_id)
     return KnowledgeTemplateList(
         templates=[KnowledgeTemplateRead.model_validate(r) for r in rows],
         schema_version=current or snapshot_version,
@@ -1084,13 +1084,3 @@ def _provenance(source: TemplateSource) -> LiteralProvenance:
         if source in machine
         else LiteralProvenance.HUMAN_AUTHORED
     )
-
-
-async def _snapshot_version(db, connection_id: UUID) -> int:
-    result = await db.execute(
-        select(SchemaSnapshotRow.version)
-        .where(SchemaSnapshotRow.connection_id == connection_id)
-        .order_by(SchemaSnapshotRow.version.desc())
-        .limit(1)
-    )
-    return result.scalar_one_or_none() or 0

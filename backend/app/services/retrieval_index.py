@@ -170,9 +170,9 @@ async def index_schema_vectors(
         pending = pending[:MAX_TABLES_PER_PASS]
         out.truncated = True
 
-    from app.services.knowledge_service import _embedding_llm
+    from app.services.knowledge_service import embedding_llm
 
-    llm = await _embedding_llm(db, settings, connection)
+    llm = await embedding_llm(db, settings, connection)
     if llm is None:
         out.error = (
             "No model provider is set up to embed, so there is nothing to "
@@ -304,10 +304,10 @@ def question_embedder(
 
     async def embed(texts: Any) -> list[list[float]]:
         from app.infra.llm.litellm_gateway import LiteLLMGateway
-        from app.services.knowledge_service import _embedding_llm
+        from app.services.knowledge_service import embedding_llm
 
         try:
-            llm = await _embedding_llm(db, settings, connection)
+            llm = await embedding_llm(db, settings, connection)
             if llm is None:
                 return []
             gateway = LiteLLMGateway.from_settings(settings)

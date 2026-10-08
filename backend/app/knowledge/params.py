@@ -198,9 +198,6 @@ class ParamProposal(BaseModel):
     #: Written for the curator, verbatim, in the row next to the checkbox.
     reason: str = ""
 
-    def as_param(self) -> TemplateParam:
-        return TemplateParam(name=self.name, type=self.type, comment=self.comment)
-
 
 @dataclass(slots=True)
 class _Candidate:

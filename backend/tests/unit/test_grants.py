@@ -456,9 +456,9 @@ async def test_an_owned_resource_can_never_be_stranded_by_a_revoke(
     the guard's shape depends on it and a migration making a column nullable
     would otherwise silently open the gap.
     """
-    from app.infra.authz.owner_only import _OWNED_TABLES
+    from app.infra.authz.owner_only import OWNED_TABLES
 
-    for table in {t.__tablename__: t for t in _OWNED_TABLES.values()}.values():
+    for table in {t.__tablename__: t for t in OWNED_TABLES.values()}.values():
         column = table.__table__.c.owner_id
         assert not column.nullable, f"{table.__tablename__}.owner_id became nullable"
 
@@ -665,7 +665,7 @@ async def test_a_connection_is_named_once_not_three_times(
 ) -> None:
     """The derived types share the connection's row and must not double-count.
 
-    `_OWNED_TABLES` maps `knowledge` and `semantic_layer` to
+    `OWNED_TABLES` maps `knowledge` and `semantic_layer` to
     `database_connections`, so a naive loop would make the refusal read as if
     there were three things to move rather than one.
     """

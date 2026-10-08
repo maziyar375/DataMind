@@ -27,6 +27,7 @@ from app.infra.db.models import SemanticLayerChangeRow
 from app.semantic import SemanticColumn, SemanticDocument
 from app.semantic import diff as d
 from app.services import audit
+from app.services.query_service import latest_snapshot
 from app.services.semantic_service import (
     SEMANTIC_DELETED,
     SEMANTIC_RESTORED,
@@ -138,7 +139,7 @@ async def test_a_run_records_the_version_it_loaded(db) -> None:  # noqa: F811
     edited.entities[0].grain = "one row per order line"
     await svc.save(conn, edited, base_revision=1, ctx=ctx())
 
-    snapshot = await svc._snapshot(conn.id)
+    snapshot = await latest_snapshot(db, conn.id)
     loaded = await load_layer(db, conn, snapshot=snapshot)
     assert loaded.version == 2 and loaded.document is not None
 
@@ -209,7 +210,7 @@ async def test_delete_publishes_an_empty_version_and_keeps_history(db) -> None: 
     assert_head_is_its_published_version(db, conn)
 
     # Nothing reaches a run, exactly as if there had never been a layer…
-    snapshot = await svc._snapshot(conn.id)
+    snapshot = await latest_snapshot(db, conn.id)
     assert await load_document(db, conn, snapshot=snapshot) is None
     assert (await load_layer(db, conn, snapshot=snapshot)).version == 0
     # …and it can be undone: restored into the draft, which still reaches no

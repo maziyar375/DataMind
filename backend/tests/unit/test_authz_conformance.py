@@ -38,7 +38,7 @@ from app.domain.value_objects.authz import (
     ResourceType,
     satisfying,
 )
-from app.infra.authz.owner_only import _OWNED_TABLES
+from app.infra.authz.owner_only import OWNED_TABLES
 from app.infra.authz.rbac import RbacAuthorizer
 from app.main import create_app
 from tests.unit.conftest import AsyncSessionShim, _connection, _team_grant, _user
@@ -255,7 +255,7 @@ def test_every_module_that_selects_an_owned_table_scopes_the_result() -> None:
     and a module that reads `database_connections` while mentioning neither
     `visible` nor `require` has no scoping to follow.
     """
-    owned = {table.__name__ for table in _OWNED_TABLES.values()}
+    owned = {table.__name__ for table in OWNED_TABLES.values()}
     scoping = ("visible", "restrict", "require(", "allowed(", "_authorized")
     offenders = []
     for path, source in _sources():

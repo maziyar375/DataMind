@@ -49,7 +49,7 @@ from app.domain.value_objects.authz import (
     Privilege,
     ResourceType,
 )
-from app.infra.authz.owner_only import _OWNED_TABLES
+from app.infra.authz.owner_only import OWNED_TABLES
 from app.infra.db.models import Grant, Team, User
 from app.services import audit
 from app.services.policy import require
@@ -195,18 +195,6 @@ class GrantService:
         )
         return views
 
-    async def for_principal(self, principal_id: UUID) -> list[Grant]:
-        """Every grant naming this principal directly. For the access review.
-
-        Direct only, and deliberately: *"what has Ali been given"* and *"what
-        can Ali reach"* are different questions, and the second is Phase 9's,
-        answered by walking teams and roles as well. Conflating them here would
-        make this method quietly the wrong tool for both.
-        """
-        rows = await self._db.execute(
-            select(Grant).where(Grant.user_id == principal_id)
-        )
-        return list(rows.scalars())
 
     # ── writing ──────────────────────────────────────────────────────────
     async def grant(
@@ -462,7 +450,7 @@ class GrantService:
         residue of a transfer that happened months ago.
         """
         await self._require_manage(ctx, ref)
-        table = _OWNED_TABLES.get(ref.type)
+        table = OWNED_TABLES.get(ref.type)
         if table is None:
             raise ValidationError("This kind of resource has no owner to transfer.")
 
@@ -627,10 +615,10 @@ class GrantService:
 
         Two hops for the derived types, and that is the point of them: a
         knowledge store's owner *is* its connection's owner, and its resource
-        id *is* the connection's id — so `_OWNED_TABLES` maps both to
+        id *is* the connection's id — so `OWNED_TABLES` maps both to
         `database_connections` and this reads the same row either way.
         """
-        table = _OWNED_TABLES.get(ref.type)
+        table = OWNED_TABLES.get(ref.type)
         if table is None:
             return None
         owner_id = (
@@ -701,7 +689,7 @@ async def owned_resources(db: AsyncSession, principal_id: UUID) -> list[str]:
     """
     names: list[str] = []
     for type_, label in _LABEL_COLUMN.items():
-        table = _OWNED_TABLES[type_]
+        table = OWNED_TABLES[type_]
         rows = await db.execute(
             select(getattr(table, label))
             # Naming what a principal owns, not deciding what anybody may

@@ -358,7 +358,7 @@ node, both thresholds, the binder, the short-circuit and the badge are untouched
   **measured** and pinned on the connection — two gateways serving one model
   name at different widths is a thing that happens.
 - **Which provider embeds is a row, and it used to be nothing at all.**
-  `_embedding_llm` resolved the owner's `llm_configs.is_default`, and
+  `embedding_llm` resolved the owner's `llm_configs.is_default`, and
   **nothing in the product has ever written `is_default`** — no route, no
   service, no form — so the lookup returned `None` for every connection of
   every account and *"Add a default model provider first"* was the only answer

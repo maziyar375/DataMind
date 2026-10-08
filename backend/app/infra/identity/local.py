@@ -213,11 +213,6 @@ class LocalIdentityProvider:
         tokens = await self.issue_session(identity)
         return identity, tokens
 
-    async def revoke_session(self, session_id: UUID) -> None:
-        row = await self._db.get(SessionRow, session_id)
-        if row is not None and row.revoked_at is None:
-            row.revoked_at = utcnow()
-            await self._db.flush()
 
     async def revoke_by_refresh_token(self, refresh_token: str) -> None:
         result = await self._db.execute(

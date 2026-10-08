@@ -44,7 +44,6 @@ from app.infra.db.models import (
     ReportBlock,
     ReportSection,
     Run,
-    SchemaSnapshotRow,
 )
 from app.knowledge import (
     KnowledgeTemplate,
@@ -94,6 +93,7 @@ from app.knowledge.matcher import (
     TemplateMatcher,
     trigrams,
 )
+from app.services.query_service import latest_snapshot
 
 log = get_logger(__name__)
 
@@ -211,7 +211,7 @@ class KnowledgeService:
         the browser so the statement that gets saved is the one the guard just
         read.
         """
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         policy = policy_from_tables(
             snapshot["tables"],
             dialect=DatabaseKind(connection.database_type).sqlglot_dialect,
@@ -247,7 +247,7 @@ class KnowledgeService:
         role: TemplateRole = TemplateRole.RETRIEVABLE,
     ) -> KnowledgeTemplateRow:
         question, note = self._clean(question, note)
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         if not snapshot["tables"]:
             raise ValidationError(_NO_SNAPSHOT)
 
@@ -308,7 +308,7 @@ class KnowledgeService:
         written by the system in Phase 4, never by a form.
         """
         row = await self.get(connection, template_id)
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
 
         next_question = row.question if question is None else question
         next_note = row.note if note is None else note
@@ -384,7 +384,7 @@ class KnowledgeService:
         write `STALE`: withdrawing a template from use is a behaviour change,
         and `sweep_staleness` below is what makes it.
         """
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         return self._verdict(connection, snapshot, self.to_model(row))
 
     # ── staleness (Phase 4: this one persists) ───────────────────────────
@@ -413,7 +413,7 @@ class KnowledgeService:
         call: it is `guard()` over the new snapshot, once per template, which
         is why it can run inline on the sync that caused it.
         """
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         if not snapshot["tables"]:
             # A sync that produced no tables is a broken sync, not a schema in
             # which every template is suddenly illegal. Marking the whole store
@@ -586,22 +586,6 @@ class KnowledgeService:
                 f"This connection already has a template for “{question}”."
             ) from err
 
-    async def _snapshot(self, connection_id: UUID) -> dict[str, Any]:
-        result = await self._db.execute(
-            select(SchemaSnapshotRow)
-            .where(SchemaSnapshotRow.connection_id == connection_id)
-            .order_by(SchemaSnapshotRow.version.desc())
-            .limit(1)
-        )
-        row = result.scalar_one_or_none()
-        if row is None:
-            return {"tables": [], "dialect": "postgres", "version": 0}
-        return {
-            "tables": row.tables,
-            "dialect": row.dialect,
-            "version": row.version,
-        }
-
 
 # ── the read path (Phase 2) ──────────────────────────────────────────────
 #: How many rows the shortlist may return before scoring. A connection with a
@@ -720,7 +704,7 @@ def _embedder(
 
         from app.infra.llm.litellm_gateway import LiteLLMGateway
 
-        llm = await _embedding_llm(db, settings, connection)
+        llm = await embedding_llm(db, settings, connection)
         if llm is None:
             return []
         gateway = LiteLLMGateway.from_settings(settings)
@@ -770,7 +754,6 @@ def _index_source(db: AsyncSession, connection: DatabaseConnection) -> Any:
     """
 
     async def source(connection_id: UUID) -> VectorIndex:
-        from app.services.query_service import latest_snapshot
 
         result = await db.execute(
             select(KnowledgeTemplateRow).where(
@@ -931,7 +914,7 @@ def pin_health(
     `embedding_llm_config_id` (`SET NULL`, so a store is never deleted with a
     provider) and leaves the model, the width and every vector exactly where
     they were — so the panel went on saying *"All 42 questions indexed"* while
-    `_embedding_llm` returned `None`, `_embedder` returned `[]` and
+    `embedding_llm` returned `None`, `_embedder` returned `[]` and
     `FallbackMatcher` quietly answered on words. Nothing in the product said
     so, and nothing could: the fault is in the *relationship* between two rows,
     which is the one thing neither row holds.
@@ -954,7 +937,7 @@ def pin_health(
     return PIN_OK, serves
 
 
-async def _embedding_llm(
+async def embedding_llm(
     db: AsyncSession, settings: Settings, connection: DatabaseConnection
 ) -> Any | None:
     """The credentials the embedding endpoint is called with.
@@ -1025,7 +1008,6 @@ async def index_embeddings(
     if not connection.embedding_model or connection.embedding_dimension <= 0:
         return out
 
-    from app.services.query_service import latest_snapshot
 
     result = await db.execute(
         select(KnowledgeTemplateRow).where(
@@ -1068,7 +1050,7 @@ async def index_embeddings(
         pending = pending[:MAX_EMBEDDINGS_PER_PASS]
         out.truncated = True
 
-    llm = await _embedding_llm(db, settings, connection)
+    llm = await embedding_llm(db, settings, connection)
     if llm is None:
         # The sentence migration `0022` existed to delete. It named
         # `is_default` — a column **nothing in this product has ever written**
@@ -1370,19 +1352,6 @@ class FeedbackService:
         await self._db.flush()
         return row
 
-    async def for_run(self, run_id: UUID, user_id: UUID) -> AnswerFeedback | None:
-        """This reader's own verdict on this answer, if they gave one.
-
-        Their own, not anyone else's: the footer shows what *you* said, and
-        showing a colleague's verdict there would be an opinion presented as a
-        fact about the answer.
-        """
-        result = await self._db.execute(
-            select(AnswerFeedback).where(
-                AnswerFeedback.run_id == run_id, AnswerFeedback.user_id == user_id
-            )
-        )
-        return result.scalar_one_or_none()
 
     # ── the review queue ─────────────────────────────────────────────────
     async def reviews(
@@ -1662,7 +1631,6 @@ class FeedbackService:
         resolve, whoever wrote it into the layer.
         """
         from app.semantic import vocabulary_terms
-        from app.services.query_service import latest_snapshot
         from app.services.semantic_service import load_document
 
         snapshot = await latest_snapshot(self._db, connection.id)

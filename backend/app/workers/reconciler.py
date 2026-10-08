@@ -84,7 +84,7 @@ async def sweep_orphaned_grants(session) -> int:
 
     One statement per owned type, each a `NOT IN` against a primary-key index,
     built through the ORM rather than by interpolating a table name into SQL —
-    `_OWNED_TABLES` is a closed map of trusted classes, but a string-built
+    `OWNED_TABLES` is a closed map of trusted classes, but a string-built
     `DELETE` in a background worker is the kind of line that gets copied
     somewhere the input is not.
     Wildcards (`resource_id IS NULL`) are excluded by construction: they name no
@@ -92,11 +92,11 @@ async def sweep_orphaned_grants(session) -> int:
     """
     from sqlalchemy import delete, select
 
-    from app.infra.authz.owner_only import _OWNED_TABLES
+    from app.infra.authz.owner_only import OWNED_TABLES
     from app.infra.db.models import Grant
 
     removed = 0
-    for type_, table in _OWNED_TABLES.items():
+    for type_, table in OWNED_TABLES.items():
         result = await session.execute(
             delete(Grant).where(
                 Grant.resource_type == str(type_),

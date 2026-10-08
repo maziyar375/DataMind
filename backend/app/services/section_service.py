@@ -32,6 +32,7 @@ from app.infra.db.models import ConnectionSection, DatabaseConnection, SchemaSna
 from app.pipeline import sections as algo
 from app.pipeline.metadata import table_chars
 from app.pipeline.nodes import retrieve_budget_chars
+from app.services.query_service import latest_snapshot
 from app.services.semantic_service import load_layer
 
 _NO_SNAPSHOT = "This connection has no schema snapshot. Sync it, then try again."
@@ -124,7 +125,7 @@ class SectionService:
     async def read(self, connection: DatabaseConnection) -> SectionSet:
         """What is saved. Nothing saved is an empty set, not a proposal — the
         screen asks for a proposal explicitly, so a GET never computes one."""
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         rows = await self._rows(connection.id)
         return self._shape(
             snapshot,
@@ -143,7 +144,7 @@ class SectionService:
         """A complete division of the snapshot, computed and returned — **never
         written**. With `only`, a division of just those tables: how *Split this
         section* asks for one section's members to be divided again."""
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         if not snapshot["tables"]:
             raise ValidationError(_NO_SNAPSHOT)
         layer = await load_layer(self._db, connection, snapshot=snapshot)
@@ -179,7 +180,7 @@ class SectionService:
         a person has looked at it — and stamped with the snapshot it was saved
         against.
         """
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         if not snapshot["tables"]:
             raise ValidationError(_NO_SNAPSHOT)
         existing = await self._rows(connection.id)
@@ -364,26 +365,3 @@ class SectionService:
             return None
         return {algo.key(t) for t in was}
 
-    async def _snapshot(self, connection_id: UUID) -> dict[str, Any]:
-        result = await self._db.execute(
-            select(SchemaSnapshotRow)
-            .where(SchemaSnapshotRow.connection_id == connection_id)
-            .order_by(SchemaSnapshotRow.version.desc())
-            .limit(1)
-        )
-        row = result.scalar_one_or_none()
-        if row is None:
-            return {
-                "tables": [], "relationships": [], "dialect": "postgres",
-                "version": 0, "synced_at": None,
-            }
-        return {
-            "tables": row.tables or [],
-            "relationships": row.relationships or [],
-            "dialect": row.dialect,
-            "version": row.version,
-            # When *this* snapshot landed, which is the date a struck-through
-            # member is explained by. `connections.last_synced_at` is the same
-            # moment for the newest one and says nothing about an older.
-            "synced_at": row.created_at,
-        }

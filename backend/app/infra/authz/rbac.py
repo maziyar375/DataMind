@@ -61,7 +61,7 @@ from app.domain.value_objects.authz import (
     ResourceType,
     satisfying,
 )
-from app.infra.authz.owner_only import _OWNED_TABLES
+from app.infra.authz.owner_only import OWNED_TABLES
 from app.infra.db import models
 
 #: The words `Decision.because` can carry from this authorizer. They go into
@@ -157,7 +157,7 @@ class RbacAuthorizer:
         if because:
             return Everything(because)
 
-        table = _OWNED_TABLES.get(type_)
+        table = OWNED_TABLES.get(type_)
         granted = self._granted_ids(ctx, type_, satisfied)
         if table is None:
             # A type with no owner column — `TEAM` today. Grants still reach
@@ -322,7 +322,7 @@ class RbacAuthorizer:
             owner = getattr(ref.entity, "owner_id", None)
             return owner if isinstance(owner, UUID) else None
 
-        table = _OWNED_TABLES.get(ref.type)
+        table = OWNED_TABLES.get(ref.type)
         if table is None:
             return None
         stmt: Select[tuple[UUID]] = select(table.owner_id).where(table.id == ref.id)

@@ -347,7 +347,6 @@ the request path entirely. See [eval.md](eval.md).
 ### `backend/app/infra` — the adapters
 - `db/` — SQLAlchemy models (**33 tables**, §4), 38 Alembic migrations, async
   session factory.
-- `repositories/` — query helpers over the ORM models.
 - `connectors/` — `factory.py` maps each `DatabaseKind` to a connector; each of
   `postgres.py` / `mysql.py` / `mssql.py` / `oracle.py` implements
   `DatabaseConnector` (introspection + read-only execution + a genuine read-only

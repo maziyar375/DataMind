@@ -557,7 +557,7 @@ class DatabaseConnection(Base, TimestampMixin):
         Integer, nullable=False, default=0, server_default=text("0")
     )
     # Which provider configuration produced this index, named rather than
-    # inferred. `_embedding_llm` used to resolve the owner's `is_default`
+    # inferred. `embedding_llm` used to resolve the owner's `is_default`
     # config — a column **nothing in the product ever wrote**, so embedding
     # search could not be switched on by anybody. Naming the row makes the
     # answer visible, keeps a store reproducible after the owner adds a second

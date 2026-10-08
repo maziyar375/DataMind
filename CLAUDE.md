@@ -139,7 +139,11 @@ backend/app/
                   published version out, value meanings only when asked; a
                   file in, to the draft),
                   query_service (execute_saved_sql — the tile/report entry point
-                  into guarded execution), sql_draft_service,
+                  into guarded execution — and the one reader of
+                  `schema_snapshots`: `latest_snapshot`, and `bind_connector`,
+                  the one place a stored password is decrypted),
+                  connection_service (probe a connection, sync its schema),
+                  sql_draft_service,
                   section_service (a connection's sections: read, propose —
                   computed and never written — and save the whole set in one
                   transaction; docs/plans/retrieval-sections.md),
@@ -254,7 +258,7 @@ backend/app/
                   Costs real money; not in `make test`. See docs/reference/eval.md
   infra/          adapters implementing the ports:
     db/           SQLAlchemy models.py + Alembic migrations + session
-    repositories/ query helpers over the ORM models
+    authz/        the Authorizer adapters (owner-only, RBAC) + `restrict`
     connectors/   factory + postgres/mysql/mssql/oracle (one DatabaseConnector each)
                   + hints.py: the engine-neutral column-hint contract they share
     llm/          LiteLLM behind LLMGateway
@@ -467,8 +471,8 @@ behind these ports; don't route around them. In particular: **never `import
 litellm` outside `app/infra/llm/`**, and **never `import langgraph` outside
 `app/pipeline/` and `app/workers/`** — CI greps for both.
 
-There are **eight** import-linter contracts now; `knowledge is self-contained`
-joined them with Phase 1 of the learning loop.
+There are **nine** import-linter contracts (`make lint` lists them); the last
+two to join were `knowledge is self-contained` and `analysis is self-contained`.
 
 ---
 

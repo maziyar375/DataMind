@@ -53,7 +53,6 @@ from app.domain.value_objects.authz import (
 )
 from app.infra.db.models import (
     Role,
-    RoleAssignment,
     RoleCapability,
     ServiceCredential,
     User,
@@ -407,32 +406,3 @@ class ServiceUserService:
                 # does, once per word, on the hot path.
                 continue
         return frozenset(held & PRIVILEGED_CAPABILITIES)
-
-
-async def is_service(db: AsyncSession, user_id: UUID) -> bool:
-    """Is this principal a machine? One column, for the `/auth/*` refusals."""
-    result = await db.execute(select(User.kind).where(User.id == user_id))
-    return result.scalar_one_or_none() == PrincipalKind.SERVICE
-
-
-async def roles_carrying_privilege(db: AsyncSession) -> frozenset[UUID]:
-    """Every role that carries at least one of the four privileged verbs.
-
-    For the create form, which hides them from the role picker and says why
-    (plan §21.5). The server refuses them regardless — this only stops
-    somebody filling in a form whose Save is going to be refused.
-    """
-    result = await db.execute(
-        select(RoleCapability.role_id).where(
-            RoleCapability.capability.in_(sorted(str(c) for c in PRIVILEGED_CAPABILITIES))
-        )
-    )
-    return frozenset(result.scalars())
-
-
-async def role_ids_of(db: AsyncSession, principal_id: UUID) -> list[UUID]:
-    """The role ids reaching this principal directly. For the detail pane."""
-    result = await db.execute(
-        select(RoleAssignment.role_id).where(RoleAssignment.user_id == principal_id)
-    )
-    return list(result.scalars())

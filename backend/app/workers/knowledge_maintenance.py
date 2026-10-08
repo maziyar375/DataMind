@@ -472,8 +472,6 @@ class KnowledgeMaintenanceExecutor:
         self._semaphore = asyncio.Semaphore(1)
         self._running: set[UUID] = set()
 
-    def is_running(self, connection_id: UUID) -> bool:
-        return connection_id in self._running
 
     async def submit(self, connection_id: UUID) -> bool:
         """Queue a pass. False when one is already queued for this connection."""

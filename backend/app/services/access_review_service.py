@@ -40,7 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.value_objects.authz import Privilege, ResourceType
-from app.infra.authz.owner_only import _OWNED_TABLES
+from app.infra.authz.owner_only import OWNED_TABLES
 from app.infra.db.models import (
     Grant,
     Role,
@@ -167,7 +167,7 @@ class AccessReviewService:
         connection's own, printed three times.
         """
         out: list[ReachRow] = []
-        for type_, table in _OWNED_TABLES.items():
+        for type_, table in OWNED_TABLES.items():
             if type_ in (ResourceType.KNOWLEDGE, ResourceType.SEMANTIC_LAYER):
                 continue
             label = _LABEL[type_]
@@ -295,7 +295,7 @@ class AccessReviewService:
         it exists to control.
         """
         names: dict[tuple[str, UUID], str] = {}
-        for type_, table in _OWNED_TABLES.items():
+        for type_, table in OWNED_TABLES.items():
             if type_ in (ResourceType.KNOWLEDGE, ResourceType.SEMANTIC_LAYER):
                 continue
             rows = await self._db.execute(

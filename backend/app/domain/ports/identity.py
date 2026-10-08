@@ -86,8 +86,6 @@ class IdentityProvider(Protocol):
         self, refresh_token: str
     ) -> tuple[AuthenticatedIdentity, SessionTokens]: ...
 
-    async def revoke_session(self, session_id: UUID) -> None: ...
-
 
 class ServiceIdentityProvider(Protocol):
     """How a **machine** proves who it is: one long-lived key, and no session.

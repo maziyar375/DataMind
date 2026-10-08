@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -36,16 +34,6 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
             get_engine(), expire_on_commit=False, class_=AsyncSession
         )
     return _sessionmaker
-
-
-async def session_scope() -> AsyncIterator[AsyncSession]:
-    async with get_sessionmaker()() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
 
 
 async def dispose_engine() -> None:

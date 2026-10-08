@@ -64,12 +64,29 @@ _DRIFT_RULES = frozenset({"E_TABLE_NOT_ALLOWED", "E_UNKNOWN_COLUMN"})
 _NO_SNAPSHOT = "This connection has no schema snapshot. Sync it, then try again."
 
 
-# ── lifted from run_service ──────────────────────────────────────────────
+# ── the one reader of `schema_snapshots` ─────────────────────────────────
+async def latest_snapshot_version(db: AsyncSession, connection_id: UUID) -> int:
+    """The newest snapshot's version number, or 0 for an unsynced connection."""
+    result = await db.execute(
+        select(SchemaSnapshotRow.version)
+        .where(SchemaSnapshotRow.connection_id == connection_id)
+        .order_by(SchemaSnapshotRow.version.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none() or 0
+
+
 async def latest_snapshot(db: AsyncSession, connection_id: UUID) -> dict[str, Any]:
     """The connection's current schema snapshot, or an empty one.
 
     Empty is not an error here — it is the input that makes the guard reject
     everything, which is exactly right for an unsynced connection.
+
+    Every service reads the snapshot through this one function, so every one
+    sees the same keys: the guard's `tables`/`relationships`/`dialect`, the
+    `catalog_meta` the schema block renders, the `version` a layer and a
+    template are stamped with, and `synced_at` — when *this* snapshot landed,
+    which is the date drift is explained by.
     """
     result = await db.execute(
         select(SchemaSnapshotRow)
@@ -80,17 +97,19 @@ async def latest_snapshot(db: AsyncSession, connection_id: UUID) -> dict[str, An
     row = result.scalar_one_or_none()
     if row is None:
         return {
-            "tables": [], "relationships": [],
-            "dialect": "postgres", "catalog_meta": {},
+            "tables": [], "relationships": [], "dialect": "postgres",
+            "catalog_meta": {}, "version": 0, "synced_at": None,
         }
     return {
-        "tables": row.tables,
-        "relationships": row.relationships,
+        "tables": row.tables or [],
+        "relationships": row.relationships or [],
         "dialect": row.dialect,
         # Database and schema descriptions, for the schema block. A pre-0012
         # row reads back as `{}`, which is the same absence a database with no
         # comments produces — nothing downstream tells the two apart.
         "catalog_meta": row.catalog_meta or {},
+        "version": row.version,
+        "synced_at": row.created_at,
     }
 
 
@@ -213,19 +232,24 @@ def resolve_llm(
     )
 
 
-def bind_connector(connection: DatabaseConnection, box: SecretBox) -> DatabaseConnector:
-    """Decrypt the stored password and build the engine's connector.
+def stored_password(connection: DatabaseConnection, box: SecretBox) -> str:
+    """Decrypt a connection's stored password.
 
     The AAD is the row identity, so a ciphertext copied between connection rows
     fails to decrypt rather than quietly working.
     """
+    return box.decrypt(connection.encrypted_password, aad=f"connection:{connection.id}")
+
+
+def bind_connector(connection: DatabaseConnection, box: SecretBox) -> DatabaseConnector:
+    """Decrypt the stored password and build the engine's connector."""
     return build_connector(
         kind=connection.database_type,
         host=connection.host,
         port=connection.port,
         database=connection.database_name,
         username=connection.username,
-        password=box.decrypt(connection.encrypted_password, aad=f"connection:{connection.id}"),
+        password=stored_password(connection, box),
         ssl_mode=connection.ssl_mode,
     )
 

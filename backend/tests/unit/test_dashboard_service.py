@@ -50,6 +50,8 @@ class FakeSnapshotRow:
         self.relationships: list[dict] = []
         self.dialect = "postgres"
         self.catalog_meta: dict[str, Any] = {}
+        self.version = 1
+        self.created_at = None
 
 
 class FakeResult:

@@ -76,22 +76,6 @@ async def can(
     return await authz.allowed(ctx, ref, privilege)
 
 
-async def can_on(
-    ctx: RequestContext,
-    authz: Authorizer,
-    type_: ResourceType,
-    entity: Any,
-    privilege: Privilege,
-) -> Decision:
-    """`can()` for a row already loaded — the common case in a service.
-
-    Passing the row means the authorizer does not re-read what the caller has
-    in memory. `ResourceRef.to` is the same thing spelled out; this is the
-    version that reads well at a call site.
-    """
-    return await authz.allowed(ctx, ResourceRef.to(type_, entity), privilege)
-
-
 def owns(ctx: RequestContext, resource: Any) -> bool:
     """Is this principal the row's owner? A **fact**, not a decision.
 

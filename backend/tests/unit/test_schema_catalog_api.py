@@ -28,7 +28,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import deps
-from app.api.v1 import connections as connections_api
 from app.core.clock import utcnow
 from app.core.context import RequestContext
 from app.domain.ports.database import ColumnInfo, SchemaSnapshot, TableInfo
@@ -38,6 +37,7 @@ from app.infra.db.models import (
     SchemaSnapshotRow,
 )
 from app.main import create_app
+from app.services import connection_service
 
 USER = uuid4()
 CONNECTION_ID = uuid4()
@@ -246,7 +246,7 @@ class _Scalars:
 def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     FakeConnector.snapshot = _commented_snapshot()
     monkeypatch.setattr(
-        connections_api, "build_connector", lambda **kwargs: FakeConnector(**kwargs)
+        connection_service, "bind_connector", lambda connection, box: FakeConnector()
     )
     db = FakeDb(_connection())
 

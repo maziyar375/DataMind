@@ -50,7 +50,7 @@ from app.infra.db import models
 #: `TEAM` has no entry because teams do not exist until Phase 4. Asking about
 #: one before then is not an error — it is a resource nobody owns, so the
 #: answer is no and the visible set is empty, which is exactly the truth.
-_OWNED_TABLES: dict[ResourceType, type[Any]] = {
+OWNED_TABLES: dict[ResourceType, type[Any]] = {
     ResourceType.CONNECTION: models.DatabaseConnection,
     ResourceType.KNOWLEDGE: models.DatabaseConnection,
     ResourceType.SEMANTIC_LAYER: models.DatabaseConnection,
@@ -66,7 +66,7 @@ def owned_table(type_: ResourceType) -> type[Any] | None:
     Public so the API can name an owner to a person who cannot change access
     ("ask Sara") without a second copy of this mapping.
     """
-    return _OWNED_TABLES.get(type_)
+    return OWNED_TABLES.get(type_)
 
 
 #: The one word `Decision.because` can carry under this policy.
@@ -129,7 +129,7 @@ class OwnerOnlyAuthorizer:
         what the rest of the codebase is written against, and Phase 6 fills it
         in without touching a single caller.
         """
-        table = _OWNED_TABLES.get(type_)
+        table = OWNED_TABLES.get(type_)
         if table is None:
             return NOTHING
         return Subquery(select(table.id).where(table.owner_id == ctx.user_id))
@@ -149,7 +149,7 @@ class OwnerOnlyAuthorizer:
             owner = getattr(ref.entity, "owner_id", None)
             return owner if isinstance(owner, UUID) else None
 
-        table = _OWNED_TABLES.get(ref.type)
+        table = OWNED_TABLES.get(ref.type)
         if table is None:
             return None
         if self._db is None:

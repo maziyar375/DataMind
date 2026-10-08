@@ -189,7 +189,7 @@ class SemanticService:
         and the draft's changes against it.
         """
         row = await self.layer_row(connection.id)
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         published_doc = _bind(row.document if row and row.document else {}, snapshot)
         has_draft = row is not None and row.draft_document is not None
         doc = _bind(row.draft_document or {}, snapshot) if has_draft else published_doc
@@ -258,7 +258,7 @@ class SemanticService:
         head = await _lock_head(self._db, connection.id)
         await _require_revision(self._db, ctx, connection.id, head, base_revision)
 
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         bound = _bind(doc, snapshot)
         published = await _publish(
             self._db, connection_id=connection.id, head=head, document=bound,
@@ -299,7 +299,7 @@ class SemanticService:
         await _require_revision(self._db, ctx, connection.id, head, base_revision)
         source = await self.version(connection.id, number)
 
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         bound = _bind(source.document or {}, snapshot)
         written = await _write_draft(
             self._db, connection_id=connection.id, head=head, document=bound,
@@ -336,7 +336,7 @@ class SemanticService:
                 detail={"revision": head.revision},
             )
             return None
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         published = await _publish(
             self._db, connection_id=connection.id, head=head,
             document=SemanticDocument(), schema_version=snapshot["version"],
@@ -367,7 +367,7 @@ class SemanticService:
         """
         head = await _lock_head(self._db, connection.id)
         await _require_revision(self._db, ctx, connection.id, head, base_revision)
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         written = await _write_draft(
             self._db, connection_id=connection.id, head=head,
             document=_bind(doc, snapshot), author=ctx.user_id, origin=None,
@@ -425,7 +425,7 @@ class SemanticService:
         if head is None or head.draft_document is None:
             raise SemanticNoChangesError("There are no unpublished changes.")
 
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         bound = _bind(head.draft_document, snapshot)
         changes = diff_documents(SemanticDocument.model_validate(head.document or {}), bound)
         if not changes:
@@ -509,7 +509,7 @@ class SemanticService:
         file, doc = read_file(raw)
         head = await _lock_head(self._db, connection.id)
         await _require_revision(self._db, ctx, connection.id, head, base_revision)
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         bound = _bind(doc, snapshot)
         written = await _write_draft(
             self._db, connection_id=connection.id, head=head, document=bound,
@@ -692,7 +692,7 @@ class SemanticService:
         not who asked what.
         """
         doc, row, facts = await self.read(connection)
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         use = await self.metric_use(connection.id, days=days)
         return needs_attention(
             doc,
@@ -735,12 +735,7 @@ class SemanticService:
         keys = {e.table.lower() for e in doc.entities if not e.exclude and e.valid}
         keys -= {c.entity_key for c in pending if c.kind == "entity_added"}
         if row.draft_updated_at is not None and pending:
-            synced_at = (await self._db.execute(
-                select(SchemaSnapshotRow.created_at).where(
-                    SchemaSnapshotRow.connection_id == connection_id,
-                    SchemaSnapshotRow.version == snapshot["version"],
-                )
-            )).scalar_one_or_none()
+            synced_at = snapshot["synced_at"]
             if synced_at is not None and row.draft_updated_at >= synced_at:
                 keys -= {c.entity_key for c in pending}
         if not keys:
@@ -851,7 +846,7 @@ class SemanticService:
         Bound first so the binder's own rewrites — a resolved table name, a
         cleared date column — are not reported as edits somebody made.
         """
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         try:
             return diff_documents(_bind(before, snapshot), _bind(after, snapshot))
         except ValueError as err:
@@ -883,7 +878,7 @@ class SemanticService:
                 "A semantic layer is already being generated for this connection."
             )
 
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         if not snapshot["tables"]:
             raise ValidationError(
                 "Sync this connection's schema before generating a semantic layer."
@@ -987,7 +982,7 @@ class SemanticService:
             await self._finish(job_id, "FAILED", error="The connection or model was removed.")
             return
 
-        snapshot = await self._snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         # A description is prose, not SQL, so the output budget gets a floor
         # the run path does not need. 2048 was that floor and it was too low by
         # a factor of three: one `_TableDraft` for a forty-column table carries
@@ -1201,35 +1196,8 @@ class SemanticService:
         Exposed because the metric editor validates against exactly this and
         should not have to reach past the service to get it.
         """
-        snapshot = await self._snapshot(connection_id)
+        snapshot = await latest_snapshot(self._db, connection_id)
         return build_index(snapshot["tables"], snapshot["dialect"])
-
-    async def _snapshot(self, connection_id: UUID) -> dict[str, Any]:
-        result = await self._db.execute(
-            select(SchemaSnapshotRow)
-            .where(SchemaSnapshotRow.connection_id == connection_id)
-            .order_by(SchemaSnapshotRow.version.desc())
-            .limit(1)
-        )
-        row = result.scalar_one_or_none()
-        if row is None:
-            return {
-                "tables": [], "relationships": [],
-                "dialect": "postgres", "version": 0, "catalog_meta": {},
-            }
-        return {
-            "tables": row.tables,
-            "relationships": row.relationships,
-            "dialect": row.dialect,
-            "version": row.version,
-            # Database and schema descriptions, for the overview pass. A
-            # pre-0012 snapshot reads back as `{}`, which is the same absence a
-            # database with no comments produces — nothing downstream may tell
-            # the two apart, and nothing downstream needs to.
-            "catalog_meta": row.catalog_meta or {},
-        }
-
-
 
 # ── versions: the one writer ─────────────────────────────────────────────
 @dataclass(slots=True)

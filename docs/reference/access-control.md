@@ -167,7 +167,7 @@ Eight places, and the conformance test fails on six of them.
       person reads, because a 403 and a share dialog both quote it — and a
       `PRIVILEGE_LABELS` row and a `SHARE_LEVELS` entry, which are what the
       share dialog offers (*Can view / Can edit / Full access*).
-- [ ] `_OWNED_TABLES` in `infra/authz/owner_only.py`, so `visible` has an
+- [ ] `OWNED_TABLES` in `infra/authz/owner_only.py`, so `visible` has an
       ownership arm to union.
 - [ ] A `_NOUN` and a `_NOT_FOUND` entry in `services/policy.py`.
 - [ ] The orphaned-grant sweep in `workers/reconciler.py`.

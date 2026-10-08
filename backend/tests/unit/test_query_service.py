@@ -155,6 +155,8 @@ class FakeSnapshotRow:
         self.relationships = snapshot["relationships"]
         self.dialect = snapshot["dialect"]
         self.catalog_meta = snapshot.get("catalog_meta") or {}
+        self.version = 1
+        self.created_at = None
 
 
 class FakeResult:

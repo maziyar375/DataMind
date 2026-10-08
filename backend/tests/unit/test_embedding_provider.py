@@ -1,7 +1,7 @@
 """Which provider embeds a knowledge store, and the dead end this replaced.
 
 Phase 7 shipped an embedding matcher that **nobody could switch on.**
-`_embedding_llm` resolved the owner's `llm_configs.is_default` row, and
+`embedding_llm` resolved the owner's `llm_configs.is_default` row, and
 `is_default` is written by nothing in this product: no route sets it, no
 service sets it, no form offers it. So the lookup returned `None` for every
 connection of every account, `PUT /knowledge/embeddings` answered *"Add a
@@ -543,7 +543,7 @@ def test_a_healthy_pin_is_the_row_that_made_it_still_serving_that_model() -> Non
 
 def test_deleting_the_only_embedder_is_a_fault_and_not_a_quiet_fallback() -> None:
     """The case the whole state exists for. `SET NULL` releases the pin, the
-    vectors stay, `_embedding_llm` returns `None`, `_embedder` returns `[]` and
+    vectors stay, `embedding_llm` returns `None`, `_embedder` returns `[]` and
     `FallbackMatcher` answers on words — correctly, silently, and for as long
     as nobody looks at the matcher hit table."""
     connection = _connection(

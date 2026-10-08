@@ -29,18 +29,17 @@ from app.api.schemas import (
     narrow_to_describe,
 )
 from app.api.v1.access import attach_access_routes, owner_names
-from app.core.clock import utcnow
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
-from app.domain.value_objects import DEEP_LIMIT_FIELDS, DeepLimits, HintBudget
+from app.domain.ports.database import ConnectionProbe
+from app.domain.value_objects import DEEP_LIMIT_FIELDS, DeepLimits
 from app.domain.value_objects.authz import Capability, Privilege, ResourceType
 from app.infra.authz.compose import restrict
-from app.infra.connectors.factory import build_connector
 from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
-from app.services import audit, deep_budget
+from app.services import audit, connection_service, deep_budget
 from app.services.grant_service import DISCLOSURE_CHANGED, GrantService
-from app.services.knowledge_service import KnowledgeService
 from app.services.policy import require
+from app.services.query_service import latest_snapshot, stored_password
 
 router = APIRouter(prefix="/connections", tags=["connections"])
 
@@ -248,13 +247,11 @@ async def test_draft_connection(
     if payload.password is not None:
         password = payload.password.get_secret_value()
     elif connection is not None:
-        password = box.decrypt(
-            connection.encrypted_password, aad=f"connection:{connection.id}"
-        )
+        password = stored_password(connection, box)
     else:
         raise ValidationError("A password is required to test a connection.")
 
-    connector = build_connector(
+    probe = await connection_service.probe_draft(
         kind=payload.database_type,
         host=payload.host,
         port=payload.port,
@@ -263,18 +260,7 @@ async def test_draft_connection(
         password=password,
         ssl_mode=payload.ssl_mode,
     )
-    try:
-        probe = await connector.probe()
-    finally:
-        await connector.close()
-
-    return ConnectionTestResult(
-        ok=probe.ok,
-        latency_ms=probe.latency_ms,
-        server_version=probe.server_version,
-        readonly_confirmed=probe.readonly_confirmed,
-        message=probe.message,
-    )
+    return _test_result(probe)
 
 
 @router.get("/{connection_id}", response_model=ConnectionRead)
@@ -478,35 +464,8 @@ async def test_connection(
     connection_id: UUID, ctx: CtxDep, db: DbDep, box: SecretBoxDep, authz: AuthzDep
 ) -> ConnectionTestResult:
     connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
-    connector = build_connector(
-        kind=connection.database_type,
-        host=connection.host,
-        port=connection.port,
-        database=connection.database_name,
-        username=connection.username,
-        password=box.decrypt(
-            connection.encrypted_password, aad=f"connection:{connection.id}"
-        ),
-        ssl_mode=connection.ssl_mode,
-    )
-    try:
-        probe = await connector.probe()
-    finally:
-        await connector.close()
-
-    connection.status = "OK" if probe.ok else "ERROR"
-    connection.readonly_confirmed = probe.readonly_confirmed
-    connection.server_version = probe.server_version
-    connection.last_tested_at = utcnow()
-    await db.flush()
-
-    return ConnectionTestResult(
-        ok=probe.ok,
-        latency_ms=probe.latency_ms,
-        server_version=probe.server_version,
-        readonly_confirmed=probe.readonly_confirmed,
-        message=probe.message,
-    )
+    probe = await connection_service.probe_stored(db, box, connection)
+    return _test_result(probe)
 
 
 @router.post("/{connection_id}/schema/sync", response_model=SchemaRead)
@@ -518,74 +477,9 @@ async def sync_schema(
     settings: SettingsDep,
     authz: AuthzDep,
 ) -> SchemaRead:
-    """Introspect and store a new snapshot version.
-
-    Foreign keys are recorded from day one even though the graph view is a
-    later release; backfilling them would mean re-syncing every connection.
-    """
+    """Introspect and store a new snapshot version."""
     connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
-    connector = build_connector(
-        kind=connection.database_type,
-        host=connection.host,
-        port=connection.port,
-        database=connection.database_name,
-        username=connection.username,
-        password=box.decrypt(
-            connection.encrypted_password, aad=f"connection:{connection.id}"
-        ),
-        ssl_mode=connection.ssl_mode,
-    )
-    try:
-        snapshot = await connector.introspect(
-            schema_allowlist=connection.schema_allowlist,
-            # Column content hints are customer data, so what may be *captured*
-            # is capped by the same policy that caps what may be disclosed.
-            # A NONE connection stores structure only — tightening the policy
-            # takes effect at once, loosening it needs a re-sync.
-            hints=HintBudget.from_policy(connection.disclosure_policy),
-        )
-    finally:
-        await connector.close()
-
-    latest = await db.execute(
-        select(SchemaSnapshotRow.version)
-        .where(SchemaSnapshotRow.connection_id == connection.id)
-        .order_by(SchemaSnapshotRow.version.desc())
-        .limit(1)
-    )
-    version = (latest.scalar_one_or_none() or 0) + 1
-
-    row = SchemaSnapshotRow(
-        id=uuid.uuid4(),
-        connection_id=connection.id,
-        version=version,
-        dialect=snapshot.dialect,
-        tables=[t.as_dict() for t in snapshot.tables],
-        relationships=[
-            {
-                "from_table": r.from_table, "from_column": r.from_column,
-                "to_table": r.to_table, "to_column": r.to_column,
-            }
-            for r in snapshot.relationships
-        ],
-        table_count=len(snapshot.tables),
-        # Table and column comments already ride inside `tables`. This carries
-        # the two the snapshot document has no room for — the database and
-        # schema descriptions — plus the counts of what the sync picked up.
-        catalog_meta=snapshot.catalog_meta(),
-    )
-    db.add(row)
-    connection.last_synced_at = utcnow()
-    await db.flush()
-
-    # Phase 4: the knowledge store is re-validated against the snapshot that
-    # just landed, in the same transaction. Inline rather than queued because
-    # it is `guard()` over each template and makes no call to the customer's
-    # database — so the curator sees the amber rows on the screen this sync
-    # returns to, rather than the next time a worker happens to run. The
-    # *conflict* half is the one that executes SQL, and it stays in the worker.
-    await KnowledgeService(db, settings).sweep_staleness(connection)
-
+    row = await connection_service.sync_schema(db, box, settings, connection)
     return _to_schema_read(row)
 
 
@@ -594,16 +488,20 @@ async def get_schema(
     connection_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
 ) -> SchemaRead:
     await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
-    result = await db.execute(
-        select(SchemaSnapshotRow)
-        .where(SchemaSnapshotRow.connection_id == connection_id)
-        .order_by(SchemaSnapshotRow.version.desc())
-        .limit(1)
-    )
-    row = result.scalar_one_or_none()
-    if row is None:
+    snapshot = await latest_snapshot(db, connection_id)
+    if not snapshot["version"]:
         raise NotFoundError("This connection has not been synced yet.")
-    return _to_schema_read(row)
+    return SchemaRead.model_validate(snapshot)
+
+
+def _test_result(probe: ConnectionProbe) -> ConnectionTestResult:
+    return ConnectionTestResult(
+        ok=probe.ok,
+        latency_ms=probe.latency_ms,
+        server_version=probe.server_version,
+        readonly_confirmed=probe.readonly_confirmed,
+        message=probe.message,
+    )
 
 
 def _to_schema_read(row: SchemaSnapshotRow) -> SchemaRead:

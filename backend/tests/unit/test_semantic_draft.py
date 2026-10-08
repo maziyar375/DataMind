@@ -31,6 +31,7 @@ from app.infra.db.models import BenchmarkRun, BenchmarkSet
 from app.semantic import SemanticDocument
 from app.semantic import diff as d
 from app.services import semantic_service
+from app.services.query_service import latest_snapshot
 from app.services.semantic_service import (
     SEMANTIC_DRAFT_DISCARDED,
     SEMANTIC_DRAFT_SAVED,
@@ -107,7 +108,7 @@ async def test_the_run_path_reads_the_published_document_while_a_draft_differs(
     await _published(db, conn)
     await svc.save_draft(conn, _refunds(), base_revision=1, ctx=ctx())
 
-    snapshot = await svc._snapshot(conn.id)
+    snapshot = await latest_snapshot(db, conn.id)
     loaded = await load_layer(db, conn, snapshot=snapshot)
     assert loaded.version == 1
     assert loaded.document is not None
@@ -168,7 +169,7 @@ async def test_a_draft_on_a_connection_with_no_layer_creates_the_head_unpublishe
     row = head(db, conn)
     assert row is not None
     assert (row.revision, row.published_version, row.document) == (1, None, {})
-    snapshot = await service(db)._snapshot(conn.id)
+    snapshot = await latest_snapshot(db, conn.id)
     assert (await load_layer(db, conn, snapshot=snapshot)).document is None
 
 
@@ -240,7 +241,7 @@ async def test_publishing_writes_the_next_version_and_clears_the_draft(db) -> No
         {"version": 2, "changes": 1, "affects_sql": True, "scored_run_id": None}
     ]
     assert_head_is_its_published_version(db, conn)
-    snapshot = await svc._snapshot(conn.id)
+    snapshot = await latest_snapshot(db, conn.id)
     loaded = await load_layer(db, conn, snapshot=snapshot)
     assert loaded.version == 2
     assert "status <> 'REFUNDED'" in loaded.document.entities[0].metrics[0].filters  # type: ignore[union-attr]
@@ -411,7 +412,7 @@ async def test_load_draft_reads_the_draft_at_its_pinned_revision_and_no_other(
     svc = service(db)
     await _published(db, conn)
     await svc.save_draft(conn, _refunds(), base_revision=1, ctx=ctx())
-    snapshot = await svc._snapshot(conn.id)
+    snapshot = await latest_snapshot(db, conn.id)
 
     # Switched off, a question reads no layer — but scoring the draft was asked
     # for explicitly, so the draft is what is read.
