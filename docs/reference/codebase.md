@@ -178,7 +178,7 @@ other people is capability-gated, and the two self-scoped routes a member has to
 their own account — `PATCH /auth/me` and `PUT /auth/me/password` — live on
 `auth` and take no user id at all, so there is no path parameter that could name
 somebody else. Each router only shapes HTTP: extracts the identity, validates the DTO
-(`schemas.py`, 1.7k lines), and calls a service. Errors map to RFC 7807 `problem+json`
+(`schemas/`, one module per API area), and calls a service. Errors map to RFC 7807 `problem+json`
 (`errors.py`). `main.py` is the ASGI factory — it wires CORS, a correlation-id
 middleware (every response carries `X-Correlation-ID`), health probes, and a
 lifespan that on boot bootstraps the admin user, reconciles orphaned runs, fails

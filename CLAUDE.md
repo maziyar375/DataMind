@@ -120,7 +120,8 @@ backend/app/
                   (three read routes: your own needs no capability because the
                   scope IS the caller; the other two need `usage.read`)
     deps.py       FastAPI dependencies (current user, session, settings)
-    schemas.py    Pydantic request/response DTOs (no secrets ever in reads)
+    schemas/      Pydantic request/response DTOs, one module per API area,
+                  all re-exported from the package (no secrets ever in reads)
     errors.py     RFC 7807 problem+json mapping
   core/           config, logging (with redaction), errors, correlation context, clock
   domain/         entities, value_objects (enums/kinds, plus llm_params.py —
@@ -960,7 +961,8 @@ at commit time and shows up as drift a release later. Full tour:
   [docs/reference/security.md](docs/reference/security.md) §2.4), so it must be one line, capped, and
   cleaned. Verify on a read-only role: this is the read most likely to need a
   privilege you cannot ask a customer for.
-- **A new API route:** router in `api/v1/`, DTO in `schemas.py`, business logic
+- **A new API route:** router in `api/v1/`, DTO in `api/schemas/<area>.py` (and
+  re-exported from `api/schemas/__init__.py`), business logic
   in a `services/*` function that owns the transaction. Literal paths (e.g.
   `/test`) must be declared **above** `/{id}` routes.
 
