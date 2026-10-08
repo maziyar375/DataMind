@@ -402,7 +402,8 @@ the puzzle-piece `Logo`, `ResultTable`, `Kpi`), chat (`chat.tsx` + the DOM-free
 (`dashboard.tsx`, `tile-editor.tsx`, `dashboard-transfer.tsx`), the semantic
 layer editor (`semantic.tsx`, with `semantic-entity.tsx`, `semantic-generate.tsx`
 and `semantic-parts.tsx`), the knowledge/curation surface
-(`knowledge.tsx`, 1.9k lines, plus the DOM-free `knowledge-template.ts`),
+(`knowledge.tsx`, with the template editor in `knowledge-editor.tsx`, plus the
+DOM-free `knowledge-template.ts`),
 reports (`report.tsx` the editor, `report-viewer.tsx` the document, plus
 `report-history.tsx`), settings
 scaffolding, and three shell-level pieces: `answer-destinations.tsx` (turning a

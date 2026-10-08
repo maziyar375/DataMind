@@ -307,7 +307,7 @@ reason the chart picker redraws from rows already returned:
   spreadsheet has to compute with them. Escaping is RFC 4180, plus a leading
   apostrophe on anything starting `=`, `+` or `@`, which Excel would otherwise
   treat as a formula.
-| `TemplateEditor` ([`knowledge.tsx`](../../frontend/src/components/knowledge.tsx)) | the Knowledge tab, and *Save as template* on a chat answer |
+| `TemplateEditor` ([`knowledge-editor.tsx`](../../frontend/src/components/knowledge-editor.tsx)) | the Knowledge tab, and *Save as template* on a chat answer |
 
 That last one is the rule stated generally: **when two screens must agree about
 a guard verdict, a disclosure rule or a parameter proposal, they share the

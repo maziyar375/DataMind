@@ -382,7 +382,12 @@ frontend/src/
                             `npm run test:sections`),
                             knowledge-queue.ts (how much curation work is
                             waiting, per connection and in total — DOM-free,
-                            `npm run test:queue`), usage-chart.ts (the token
+                            `npm run test:queue`), knowledge.tsx (the curation
+                            console) + knowledge-editor.tsx (the template
+                            editor, also opened from a chat answer),
+                            chat-sidebar.tsx and chat-composer.tsx (the
+                            thread list and the composer of `ChatPage`),
+                            usage-chart.ts (the token
                             usage screen's arithmetic: periods, the dense slots
                             that run a timeline to *now*, ticks and labels on
                             an explicit UTC offset, and the sentences that stop

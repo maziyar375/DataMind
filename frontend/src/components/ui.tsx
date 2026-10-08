@@ -914,6 +914,27 @@ export function ListNewButton({
   )
 }
 
+/** The style of a small square icon button (24px), as the chat list and
+ * composer draw them. `--rm-hover-bg` is picked up by the
+ * `.rm-icon-btn:hover` rule in styles.css. */
+export function iconBtnStyle(color: string, hoverBg: string): React.CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    border: 'none',
+    background: 'transparent',
+    color,
+    cursor: 'pointer',
+    flexShrink: 0,
+    transition: 'background .1s ease',
+    ...({ '--rm-hover-bg': hoverBg } as React.CSSProperties),
+  }
+}
+
 export function GhostButton({
   children, style, ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
