@@ -58,8 +58,9 @@ money. `python -m app.eval.runner --suite sales_v1` from `backend/`, or
 | Anything permission-shaped | `make authz-check` **and** `make test` |
 | Frontend | `npm run typecheck` + `npm run build` + `npm test` |
 
-The backend suite is ~1,790 tests plus 14 skips and takes well under a minute.
-(It used to take three, because an unhandled exception inside an API test was
+The backend suite is ~3,500 tests plus 14 skips and takes about two and a half
+minutes — the time is the size of the suite, not a stall. (It once took three
+minutes at half the size, because an unhandled exception inside an API test was
 logged through structlog's **rich** console renderer, which walks every frame's
 locals — one of which is a SQLAlchemy `Select`. `tests/conftest.py` now forces
 JSON logs; a single failing API test used to cost over a minute of rendering

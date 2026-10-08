@@ -83,7 +83,7 @@ Three surfaces sit on one guarded path: **Chat** (one question), **Dashboards**
 ## Commands
 
 ```bash
-make test         # full backend suite, ~1,790 tests, well under a minute
+make test         # full backend suite, ~3,500 tests, a few minutes
 make guard        # the hostile SQL corpus alone — the hard CI gate
 make lint         # ruff + the nine import-linter contracts
 make authz-check  # prove no module decides access for itself
